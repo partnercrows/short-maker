@@ -6,23 +6,52 @@ own `shutil.which` + `subprocess.run` pair.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
+
+# On this class of Windows setup, whether ffmpeg/ffprobe are actually on PATH
+# depends entirely on which shell/session launched the sidecar -- a WinGet
+# install (the common case) adds a Links shim dir to the *user* PATH, which a
+# process started from a different session (a service, a differently-launched
+# terminal, ...) won't have. Same category of fragility as the CUDA DLL PATH
+# issue (see gpu_utils.py): fall back to searching common install locations
+# instead of hard-failing the moment `shutil.which` comes back empty.
+_FALLBACK_SEARCH_ROOTS = [
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages",
+    Path("C:/ffmpeg/bin"),
+    Path("C:/Program Files/ffmpeg/bin"),
+]
+
+
+@lru_cache
+def _find_binary(name: str) -> str:
+    found = shutil.which(name)
+    if found:
+        return found
+
+    exe_name = f"{name}.exe"
+    for root in _FALLBACK_SEARCH_ROOTS:
+        if not root.is_dir():
+            continue
+        try:
+            match = next(root.rglob(exe_name), None)
+        except OSError:
+            continue
+        if match:
+            return str(match)
+
+    raise RuntimeError(f"{name} not found on PATH or in common install locations")
 
 
 def ffmpeg_path() -> str:
-    found = shutil.which("ffmpeg")
-    if not found:
-        raise RuntimeError("ffmpeg not found on PATH")
-    return found
+    return _find_binary("ffmpeg")
 
 
 def ffprobe_path() -> str:
-    found = shutil.which("ffprobe")
-    if not found:
-        raise RuntimeError("ffprobe not found on PATH")
-    return found
+    return _find_binary("ffprobe")
 
 
 class VideoMetadata:
