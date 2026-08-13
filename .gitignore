@@ -22,6 +22,9 @@ ShortMakerData/
 temp/
 logs/
 
+# Claude Code local session state
+.claude/
+
 # Source test footage and generated spike media (large binaries, not source code)
 /video/
 backend/spike/thumbnails/
