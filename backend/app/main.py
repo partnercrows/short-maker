@@ -21,13 +21,16 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Short Maker Sidecar", version="0.1.0", lifespan=lifespan)
 
-# The sidecar only ever binds to localhost, and the frontend (Vite dev server on
-# :1420, or the tauri:// scheme in a packaged build) is a different origin from
-# this API's own port -- browsers enforce CORS regardless of both being local,
-# so without this every fetch() from the UI fails before a response is even read.
+# The sidecar only ever binds to localhost, and the frontend -- Vite dev server on
+# :1420, or whatever origin WebView2 actually uses for a packaged build (this has
+# proven inconsistent across dev vs. installed builds) -- is a different origin
+# from this API's own port, so without this every fetch() from the UI fails before
+# a response is even read. A wildcard is fine here: this endpoint is bound to
+# 127.0.0.1 only and every route besides /health still requires the bearer token,
+# so no cookie/credential-based auth is at stake that a wildcard would weaken.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:1420", "tauri://localhost", "https://tauri.localhost"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

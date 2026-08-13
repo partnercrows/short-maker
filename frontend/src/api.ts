@@ -1,10 +1,17 @@
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+
+// The webview loads over https://tauri.localhost in a packaged build, and
+// browsers block a plain http:// fetch from an https:// page as mixed
+// content -- regardless of CORS. @tauri-apps/plugin-http routes the request
+// through Rust instead of the webview's own network stack, sidestepping
+// both that and CORS entirely.
 const API_BASE = "http://127.0.0.1:8000";
 
 let cachedToken: string | null = null;
 
 async function getToken(): Promise<string> {
   if (cachedToken) return cachedToken;
-  const res = await fetch(`${API_BASE}/dev/session-token`);
+  const res = await tauriFetch(`${API_BASE}/dev/session-token`);
   const data = await res.json();
   cachedToken = data.token;
   return cachedToken!;
@@ -17,7 +24,7 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs = D
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await tauriFetch(`${API_BASE}${path}`, {
       ...options,
       signal: controller.signal,
       headers: {
