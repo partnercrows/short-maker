@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { t, type Language } from "./i18n";
+import { getActiveJobs, subscribeActiveJobs } from "./jobStatusStore";
 
 export type View = "clipper" | "history" | "settings";
 
@@ -27,6 +28,7 @@ function NavButton({ active, label, onClick }: { active: boolean; label: string;
 
 export default function Sidebar({ view, onNavigate, language }: Props) {
   const [version, setVersion] = useState("0.1.0");
+  const activeJobs = useSyncExternalStore(subscribeActiveJobs, getActiveJobs);
 
   useEffect(() => {
     getVersion()
@@ -42,6 +44,24 @@ export default function Sidebar({ view, onNavigate, language }: Props) {
         <NavButton active={view === "clipper"} label={t(language, "nav_ai_clipper")} onClick={() => onNavigate("clipper")} />
         <NavButton active={view === "history"} label={t(language, "nav_history")} onClick={() => onNavigate("history")} />
       </nav>
+
+      {activeJobs.length > 0 && (
+        <button
+          onClick={() => onNavigate("clipper")}
+          className="mt-3 rounded border border-purple-300 bg-purple-50 p-2 text-left text-xs text-purple-700 hover:bg-purple-100 dark:border-purple-800 dark:bg-purple-950 dark:text-purple-300"
+        >
+          <div className="mb-1 flex items-center gap-1.5 font-medium">
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-purple-500" />
+            {t(language, "background_jobs_running")}
+          </div>
+          {activeJobs.map((job, i) => (
+            <div key={i} className="flex items-center justify-between">
+              <span className="truncate">{job.label}</span>
+              <span className="ml-2 shrink-0">{job.progress.toFixed(0)}%</span>
+            </div>
+          ))}
+        </button>
+      )}
 
       <div className="flex-1" />
 

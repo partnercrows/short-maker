@@ -90,6 +90,30 @@ export interface ProviderConfig {
   base_url?: string;
 }
 
+export interface ProviderCredentials {
+  provider_type: string;
+  api_key: string;
+  base_url?: string;
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  detail: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  display_name: string;
+}
+
+export function testProviderConnection(creds: ProviderCredentials): Promise<ConnectionTestResult> {
+  return request("/ai-providers/test-connection", { method: "POST", body: JSON.stringify(creds) });
+}
+
+export function listProviderModels(creds: ProviderCredentials): Promise<ModelInfo[]> {
+  return request("/ai-providers/models", { method: "POST", body: JSON.stringify(creds) }, 20_000);
+}
+
 export function createProject(name: string, sourceVideoPath: string): Promise<Project> {
   // Longer timeout: this copies the source video into project storage server-side,
   // which can take a while for a large file.
@@ -140,6 +164,10 @@ export function generateClip(clipId: string, includeSubtitle: boolean, outputFol
 
 export function getJob(jobId: string): Promise<Job> {
   return request(`/jobs/${jobId}`);
+}
+
+export function listJobs(projectId: string): Promise<Job[]> {
+  return request(`/jobs?project_id=${projectId}`);
 }
 
 export function cancelJob(jobId: string): Promise<Job> {

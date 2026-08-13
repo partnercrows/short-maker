@@ -22,6 +22,15 @@ const dict = {
   base_url: { id: "Base URL", en: "Base URL" },
   base_url_hint_default: { id: "Kosongkan untuk pakai default provider", en: "Leave blank to use the provider's default" },
   base_url_hint_custom: { id: "https://endpoint-kamu/v1", en: "https://your-endpoint/v1" },
+  custom_provider_config: { id: "Konfigurasi Custom Provider", en: "Custom Provider Configuration" },
+  model_name: { id: "Nama Model", en: "Model Name" },
+  model_name_placeholder: { id: "cth: gpt-4o-mini", en: "e.g. gpt-4o-mini" },
+  ai_model: { id: "Model AI", en: "AI Model" },
+  reload_models: { id: "Muat Ulang Model", en: "Reload Models" },
+  test_connection: { id: "Tes Koneksi AI", en: "Test AI Connection" },
+  testing_connection: { id: "Menguji koneksi...", en: "Testing connection..." },
+  api_key_valid: { id: "API Key valid!", en: "API Key is valid!" },
+  api_key_invalid: { id: "API Key tidak valid", en: "API Key is invalid" },
   num_clips: { id: "Jumlah klip", en: "Number of clips" },
   num_clips_hint: {
     id: '"Auto" membiarkan AI menentukan jumlah klip terbaik dari video ini.',
@@ -29,9 +38,12 @@ const dict = {
   },
   analyze: { id: "Analisa →", en: "Analyze →" },
   analyzing: { id: "Menganalisa...", en: "Analyzing..." },
+  generating: { id: "Membuat klip...", en: "Generating clip..." },
 
   generate_with_subtitle: { id: "Generate (dengan subtitle)", en: "Generate (with subtitles)" },
   status_label: { id: "status", en: "status" },
+
+  background_jobs_running: { id: "Sedang berjalan di background", en: "Running in background" },
 
   save_settings_apply_defaults: {
     id: "Pengaturan default AI provider diterapkan otomatis di step Analisa.",
@@ -102,6 +114,15 @@ const dict = {
   history_created: { id: "Dibuat", en: "Created" },
   history_duration: { id: "Durasi", en: "Duration" },
   history_status: { id: "Status", en: "Status" },
+  history_retry: { id: "Coba Lagi", en: "Retry" },
+
+  job_type_analyze_video: { id: "Analisa", en: "Analysis" },
+  job_type_generate_clip: { id: "Pembuatan klip", en: "Clip generation" },
+  job_status_queued: { id: "menunggu", en: "queued" },
+  job_status_running: { id: "berjalan", en: "running" },
+  job_status_completed: { id: "selesai", en: "completed" },
+  job_status_failed: { id: "gagal", en: "failed" },
+  job_status_cancelled: { id: "dibatalkan", en: "cancelled" },
 
   footer_copyright: { id: "Hak Cipta", en: "Copyright" },
 } as const;

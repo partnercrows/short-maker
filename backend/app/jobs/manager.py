@@ -89,6 +89,30 @@ class JobManager:
             event = self._cancel_events.get(job_id)
         return event.is_set() if event else False
 
+    def reconcile_orphaned(self) -> None:
+        """Call once at process startup. A job left 'queued'/'running' in the
+        DB at this point belonged to a worker thread that died with the
+        previous process (crash, force-quit, forced update install) --
+        nothing will ever move it forward, so it would otherwise sit there
+        looking like it's still working. Mark it failed so History shows a
+        clear, retryable state instead of a silent ghost."""
+        now = _now()
+        with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE jobs SET status = ?, error = ?, finished_at = ?
+                WHERE status IN (?, ?)
+                """,
+                (
+                    JobStatus.FAILED.value,
+                    "Interrupted: the app was closed or restarted before this finished.",
+                    now,
+                    JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                ),
+            )
+            conn.commit()
+
     def _update(
         self,
         job_id: str,

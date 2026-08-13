@@ -9,6 +9,7 @@ from app.api import ai_providers, clips, jobs, projects, social_kit, subtitles, 
 from app.core.gpu_utils import ensure_cuda_dlls_on_path
 from app.core.security import get_or_create_api_token
 from app.db.connection import init_db
+from app.jobs.manager import job_manager
 
 
 @asynccontextmanager
@@ -16,6 +17,7 @@ async def lifespan(_: FastAPI):
     init_db()
     get_or_create_api_token()  # ensures the token file exists for the Tauri shell to read
     ensure_cuda_dlls_on_path()
+    job_manager.reconcile_orphaned()
     yield
 
 

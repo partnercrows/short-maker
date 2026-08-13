@@ -49,35 +49,66 @@ class ProviderConfig(BaseModel):
     base_url: str | None = None
 
 
+class ProviderCredentials(BaseModel):
+    """Just enough to authenticate -- no model chosen yet. Used to validate an
+    API key and list the models it can access, before the user has to pick one."""
+
+    provider_type: ProviderType
+    api_key: str
+    base_url: str | None = None
+
+
 class ConnectionTestResult(BaseModel):
     ok: bool
     detail: str
 
 
-async def test_connection(config: ProviderConfig) -> ConnectionTestResult:
-    if config.provider_type == ProviderType.GEMINI:
-        try:
-            client = genai.Client(api_key=config.api_key)
-            client.models.get(model=config.model)
-            return ConnectionTestResult(ok=True, detail="Connected.")
-        except Exception as exc:  # noqa: BLE001 -- surfaced to the user as a plain message
-            return ConnectionTestResult(ok=False, detail=f"Connection failed: {exc}")
+class ModelInfo(BaseModel):
+    id: str
+    display_name: str
 
-    base_url = config.base_url or OPENAI_COMPATIBLE_DEFAULT_BASE_URLS.get(config.provider_type.value)
-    if not base_url:
-        return ConnectionTestResult(ok=False, detail="Custom providers require a base_url.")
 
+async def test_connection(creds: ProviderCredentials) -> ConnectionTestResult:
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{base_url.rstrip('/')}/models",
-                headers={"Authorization": f"Bearer {config.api_key}"},
-            )
-        if response.status_code == 200:
-            return ConnectionTestResult(ok=True, detail="Connected.")
-        return ConnectionTestResult(ok=False, detail=f"Provider returned HTTP {response.status_code}.")
-    except httpx.HTTPError as exc:
+        models = await list_models(creds)
+    except Exception as exc:  # noqa: BLE001 -- surfaced to the user as a plain message
         return ConnectionTestResult(ok=False, detail=f"Connection failed: {exc}")
+    return ConnectionTestResult(ok=True, detail=f"Connected. {len(models)} model(s) available.")
+
+
+async def list_models(creds: ProviderCredentials) -> list[ModelInfo]:
+    if creds.provider_type == ProviderType.GEMINI:
+        return await _list_models_gemini(creds)
+    return await _list_models_openai_compatible(creds)
+
+
+async def _list_models_gemini(creds: ProviderCredentials) -> list[ModelInfo]:
+    client = genai.Client(api_key=creds.api_key)
+    models: list[ModelInfo] = []
+    for m in client.models.list():
+        actions = getattr(m, "supported_actions", None) or getattr(m, "supported_generation_methods", None) or []
+        if actions and "generateContent" not in actions:
+            continue
+        model_id = (m.name or "").removeprefix("models/")
+        if not model_id:
+            continue
+        models.append(ModelInfo(id=model_id, display_name=m.display_name or model_id))
+    return models
+
+
+async def _list_models_openai_compatible(creds: ProviderCredentials) -> list[ModelInfo]:
+    base_url = creds.base_url or OPENAI_COMPATIBLE_DEFAULT_BASE_URLS.get(creds.provider_type.value)
+    if not base_url:
+        raise ValueError("Custom providers require a base_url.")
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(
+            f"{base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {creds.api_key}"},
+        )
+    response.raise_for_status()
+    items = response.json().get("data", [])
+    return [ModelInfo(id=item["id"], display_name=item.get("id", "")) for item in items if item.get("id")]
 
 
 def complete_chat(config: ProviderConfig, system_prompt: str, user_prompt: str) -> str:

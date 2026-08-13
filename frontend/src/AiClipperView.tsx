@@ -13,6 +13,8 @@ import {
 } from "./api";
 import { t, type Language } from "./i18n";
 import { notify } from "./notify";
+import { setActiveJob } from "./jobStatusStore";
+import ProviderConfigFields from "./ProviderConfigFields";
 import type { AppSettings } from "./settings";
 
 function useEtaSeconds(job: Job | null): number | null {
@@ -38,7 +40,6 @@ function formatSeconds(totalSeconds: number): string {
 }
 
 const STEPS_KEY = ["step_project", "step_analyze", "step_clips"] as const;
-const PROVIDERS = ["gemini", "openai", "deepseek", "groq", "openrouter", "xai", "mistral", "custom"] as const;
 const CLIP_COUNT_OPTIONS = ["auto", "3", "5", "10"] as const;
 
 function Label({ text, required }: { text: string; required?: boolean }) {
@@ -101,22 +102,24 @@ function parseAnalysis(clip: Clip) {
 
 interface Props {
   settings: AppSettings;
+  onSettingsChange: (next: AppSettings) => void;
   openProject: Project | null;
 }
 
-export default function AiClipperView({ settings, openProject }: Props) {
+export default function AiClipperView({ settings, onSettingsChange, openProject }: Props) {
   const lang = settings.language;
   const [step, setStep] = useState(1);
 
   const [name, setName] = useState("My Project");
   const [videoPath, setVideoPath] = useState("");
 
-  const [providerType, setProviderType] = useState<(typeof PROVIDERS)[number]>(
-    (settings.provider.providerType as (typeof PROVIDERS)[number]) || "gemini",
-  );
-  const [model, setModel] = useState(settings.provider.model);
-  const [apiKey, setApiKey] = useState(settings.provider.apiKey);
-  const [baseUrl, setBaseUrl] = useState(settings.provider.baseUrl);
+  // Provider config lives in `settings` (not local state) so it's set once --
+  // here or in Settings -- and reused everywhere, instead of having to be
+  // re-typed every time this view is opened.
+  const provider = settings.provider;
+  function setProvider(next: AppSettings["provider"]) {
+    onSettingsChange({ ...settings, provider: next });
+  }
   const [clipCountOption, setClipCountOption] = useState<(typeof CLIP_COUNT_OPTIONS)[number]>("auto");
 
   const [project, setProject] = useState<Project | null>(null);
@@ -141,8 +144,42 @@ export default function AiClipperView({ settings, openProject }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openProject]);
 
+  // Mirror the currently running job(s) into a global store so other views (e.g. the
+  // sidebar) can show that something is still processing even while this view is hidden.
+  useEffect(() => {
+    if (analyzeJob && (analyzeJob.status === "queued" || analyzeJob.status === "running")) {
+      setActiveJob("analyze", {
+        label: t(lang, "analyzing"),
+        progress: analyzeJob.progress,
+        step: analyzeJob.current_step,
+      });
+    } else {
+      setActiveJob("analyze", null);
+    }
+  }, [analyzeJob, lang]);
+
+  useEffect(() => {
+    for (const [clipId, job] of Object.entries(generateJobs)) {
+      const key = `generate-${clipId}`;
+      if (job.status === "queued" || job.status === "running") {
+        setActiveJob(key, { label: t(lang, "generating"), progress: job.progress, step: job.current_step });
+      } else {
+        setActiveJob(key, null);
+      }
+    }
+  }, [generateJobs, lang]);
+
+  useEffect(() => {
+    return () => {
+      setActiveJob("analyze", null);
+      for (const clipId of Object.keys(generateJobs)) setActiveJob(`generate-${clipId}`, null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const step1Valid = name.trim() !== "" && videoPath.trim() !== "";
-  const step2Valid = model.trim() !== "" && apiKey.trim() !== "" && (providerType !== "custom" || baseUrl.trim() !== "");
+  const step2Valid =
+    provider.model.trim() !== "" && provider.apiKey.trim() !== "" && (provider.providerType !== "custom" || provider.baseUrl.trim() !== "");
 
   async function handleBrowseVideo() {
     setError(null);
@@ -183,8 +220,13 @@ export default function AiClipperView({ settings, openProject }: Props) {
     setAnalyzing(true);
     try {
       const numClips = clipCountOption === "auto" ? null : Number(clipCountOption);
-      const provider = { provider_type: providerType, model, api_key: apiKey, base_url: baseUrl || undefined };
-      const job = await analyzeProject(project.id, provider, numClips, settings.useGpu);
+      const providerConfig = {
+        provider_type: provider.providerType,
+        model: provider.model,
+        api_key: provider.apiKey,
+        base_url: provider.baseUrl || undefined,
+      };
+      const job = await analyzeProject(project.id, providerConfig, numClips, settings.useGpu);
       setAnalyzeJob(job);
       const finished = await pollJob(job.id, setAnalyzeJob);
       if (finished.status === "completed") {
@@ -284,53 +326,7 @@ export default function AiClipperView({ settings, openProject }: Props) {
             {project.name} ({project.source_duration?.toFixed(0)}s, {project.source_resolution})
           </div>
 
-          <div>
-            <Label text={t(lang, "provider")} required />
-            <select
-              className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800"
-              value={providerType}
-              disabled={analyzing}
-              onChange={(e) => setProviderType(e.target.value as (typeof PROVIDERS)[number])}
-            >
-              {PROVIDERS.map((p) => (
-                <option key={p} value={p}>
-                  {p === "custom" ? "Custom (OpenAI-compatible)" : p}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <Label text={t(lang, "model")} required />
-            <input
-              className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800"
-              value={model}
-              disabled={analyzing}
-              onChange={(e) => setModel(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <Label text={t(lang, "api_key")} required />
-            <input
-              className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800"
-              type="password"
-              value={apiKey}
-              disabled={analyzing}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <Label text={t(lang, "base_url")} required={providerType === "custom"} />
-            <input
-              className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800"
-              placeholder={providerType === "custom" ? t(lang, "base_url_hint_custom") : t(lang, "base_url_hint_default")}
-              value={baseUrl}
-              disabled={analyzing}
-              onChange={(e) => setBaseUrl(e.target.value)}
-            />
-          </div>
+          <ProviderConfigFields lang={lang} value={provider} disabled={analyzing} onChange={setProvider} />
 
           <div>
             <Label text={t(lang, "num_clips")} />

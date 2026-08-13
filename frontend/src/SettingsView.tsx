@@ -3,10 +3,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCapabilities, type SystemCapabilities } from "./api";
 import { t } from "./i18n";
+import ProviderConfigFields from "./ProviderConfigFields";
 import type { AppSettings } from "./settings";
 import { checkForUpdate, type UpdateCheckResult } from "./updater";
-
-const PROVIDERS = ["gemini", "openai", "deepseek", "groq", "openrouter", "xai", "mistral", "custom"] as const;
 
 interface Props {
   settings: AppSettings;
@@ -71,11 +70,6 @@ export default function SettingsView({ settings, onChange }: Props) {
     setSaved(false);
   }
 
-  function updateProvider<K extends keyof AppSettings["provider"]>(key: K, value: AppSettings["provider"][K]) {
-    setDraft((prev) => ({ ...prev, provider: { ...prev.provider, [key]: value } }));
-    setSaved(false);
-  }
-
   async function handleBrowseFolder() {
     const path = await open({ multiple: false, directory: true });
     if (typeof path === "string") update("outputFolder", path);
@@ -135,46 +129,14 @@ export default function SettingsView({ settings, onChange }: Props) {
       <section className="space-y-3">
         <h3 className="text-sm font-semibold text-neutral-500">{t(lang, "settings_ai_provider")}</h3>
         <p className="text-xs text-neutral-500">{t(lang, "settings_ai_provider_hint")}</p>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">{t(lang, "provider")}</label>
-          <select
-            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-800"
-            value={draft.provider.providerType}
-            onChange={(e) => updateProvider("providerType", e.target.value)}
-          >
-            {PROVIDERS.map((p) => (
-              <option key={p} value={p}>
-                {p === "custom" ? "Custom (OpenAI-compatible)" : p}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">{t(lang, "model")}</label>
-          <input
-            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-800"
-            value={draft.provider.model}
-            onChange={(e) => updateProvider("model", e.target.value)}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">{t(lang, "api_key")}</label>
-          <input
-            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-800"
-            type="password"
-            value={draft.provider.apiKey}
-            onChange={(e) => updateProvider("apiKey", e.target.value)}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-medium text-neutral-600 dark:text-neutral-400">{t(lang, "base_url")}</label>
-          <input
-            className="w-full rounded border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-800"
-            placeholder={draft.provider.providerType === "custom" ? t(lang, "base_url_hint_custom") : t(lang, "base_url_hint_default")}
-            value={draft.provider.baseUrl}
-            onChange={(e) => updateProvider("baseUrl", e.target.value)}
-          />
-        </div>
+        <ProviderConfigFields
+          lang={lang}
+          value={draft.provider}
+          onChange={(next) => {
+            setDraft((prev) => ({ ...prev, provider: next }));
+            setSaved(false);
+          }}
+        />
       </section>
 
       <section className="space-y-3">

@@ -34,7 +34,11 @@ function App() {
     <div className="flex min-h-screen bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
       <Sidebar view={view} onNavigate={handleNavigate} language={settings.language} />
       <main className="flex-1 overflow-auto p-6">
-        {view === "clipper" && <AiClipperView settings={settings} openProject={openProject} />}
+        {/* Kept mounted (just hidden) so an in-progress analyze/generate job and its
+            polling loop survive switching to another menu, instead of being destroyed. */}
+        <div className={view === "clipper" ? "" : "hidden"}>
+          <AiClipperView settings={settings} onSettingsChange={handleSettingsChange} openProject={openProject} />
+        </div>
         {view === "history" && <HistoryView language={settings.language} onOpenProject={handleOpenProject} />}
         {view === "settings" && <SettingsView settings={settings} onChange={handleSettingsChange} />}
       </main>

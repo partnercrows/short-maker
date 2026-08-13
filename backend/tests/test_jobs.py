@@ -58,3 +58,22 @@ def test_list_filters_by_project():
     assert len(manager.list(project_id="proj-a")) == 1
     assert len(manager.list(project_id="proj-b")) == 1
     assert len(manager.list()) == 2
+
+
+def test_reconcile_orphaned_fails_stuck_jobs_but_leaves_finished_ones():
+    init_db()
+    _make_project("proj-1")
+    manager = JobManager()
+    queued = manager.create(JobType.ANALYZE_VIDEO, project_id="proj-1")
+    running = manager.create(JobType.GENERATE_CLIP, project_id="proj-1")
+    manager.start(running.id)
+    completed = manager.create(JobType.ANALYZE_VIDEO, project_id="proj-1")
+    manager.start(completed.id)
+    manager.complete(completed.id)
+
+    manager.reconcile_orphaned()
+
+    assert manager.get(queued.id).status == JobStatus.FAILED
+    assert manager.get(running.id).status == JobStatus.FAILED
+    assert manager.get(running.id).error is not None
+    assert manager.get(completed.id).status == JobStatus.COMPLETED

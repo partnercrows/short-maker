@@ -5,7 +5,14 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.ai_providers.registry import ConnectionTestResult, ProviderConfig, test_connection
+from app.ai_providers.registry import (
+    ConnectionTestResult,
+    ModelInfo,
+    ProviderConfig,
+    ProviderCredentials,
+    list_models,
+    test_connection,
+)
 from app.api.schemas import AIProvider, AIProviderCreate
 from app.core.security import require_local_token
 from app.db.connection import get_connection
@@ -18,8 +25,16 @@ def _now() -> str:
 
 
 @router.post("/test-connection", response_model=ConnectionTestResult)
-async def test_provider_connection(config: ProviderConfig) -> ConnectionTestResult:
-    return await test_connection(config)
+async def test_provider_connection(creds: ProviderCredentials) -> ConnectionTestResult:
+    return await test_connection(creds)
+
+
+@router.post("/models", response_model=list[ModelInfo])
+async def list_provider_models(creds: ProviderCredentials) -> list[ModelInfo]:
+    try:
+        return await list_models(creds)
+    except Exception as exc:  # noqa: BLE001 -- surfaced to the user as a plain message
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("", response_model=AIProvider)
