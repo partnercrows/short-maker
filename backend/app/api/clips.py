@@ -3,8 +3,10 @@ from __future__ import annotations
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.api.schemas import Clip, GenerateClipRequest
+from app.core.clip_export import copy_clip_to_folder
 from app.core.security import require_local_token
 from app.db.connection import get_connection
 from app.jobs.manager import job_manager
@@ -12,6 +14,10 @@ from app.jobs.models import Job, JobType
 from app.jobs.runners import run_generate_job
 
 router = APIRouter(prefix="/clips", tags=["clips"], dependencies=[Depends(require_local_token)])
+
+
+class CopyClipRequest(BaseModel):
+    destination_folder: str
 
 
 @router.get("", response_model=list[Clip])
@@ -41,6 +47,20 @@ def delete_clip(clip_id: str) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
         conn.commit()
+
+
+@router.post("/{clip_id}/copy-to", status_code=204)
+def copy_clip_to(clip_id: str, payload: CopyClipRequest) -> None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    if not row["video_path"]:
+        raise HTTPException(status_code=400, detail="This clip hasn't been generated yet")
+    try:
+        copy_clip_to_folder(row, row["video_path"], row["subtitle_path"], payload.destination_folder)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{clip_id}/generate", response_model=Job)

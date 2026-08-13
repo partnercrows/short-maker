@@ -162,6 +162,43 @@ export function generateClip(clipId: string, includeSubtitle: boolean, outputFol
   });
 }
 
+export function copyClipTo(clipId: string, destinationFolder: string): Promise<void> {
+  return request(`/clips/${clipId}/copy-to`, {
+    method: "POST",
+    body: JSON.stringify({ destination_folder: destinationFolder }),
+  });
+}
+
+export interface TitleOption {
+  title: string;
+  score: number;
+}
+
+export interface SocialKit {
+  id: string;
+  clip_id: string;
+  platform: string;
+  titles_json: string | null;
+  description: string | null;
+  hashtags: string | null;
+  thumbnail_idea: string | null;
+  thumbnail_prompt: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function getSocialKits(clipId: string): Promise<SocialKit[]> {
+  return request(`/social-kit/${clipId}`);
+}
+
+export function generateSocialKit(clipId: string, platform: string, provider: ProviderConfig): Promise<SocialKit> {
+  return request(`/social-kit/${clipId}/generate`, { method: "POST", body: JSON.stringify({ platform, provider }) }, 60_000);
+}
+
+export function regenerateSocialKit(clipId: string, platform: string, provider: ProviderConfig): Promise<SocialKit> {
+  return request(`/social-kit/${clipId}/regenerate`, { method: "POST", body: JSON.stringify({ platform, provider }) }, 60_000);
+}
+
 export function getJob(jobId: string): Promise<Job> {
   return request(`/jobs/${jobId}`);
 }

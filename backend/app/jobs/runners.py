@@ -7,12 +7,12 @@ queued->running->completed/failed lifecycle every job uses.
 from __future__ import annotations
 
 import json
-import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.ai_providers.registry import ProviderConfig
+from app.core.clip_export import copy_clip_to_folder
 from app.core.config import get_settings
 from app.core.ffmpeg_utils import cut_subclip, extract_audio, probe_metadata
 from app.db.connection import get_connection
@@ -207,26 +207,8 @@ def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool, output_f
             conn.commit()
 
 
-def _safe_filename(name: str) -> str:
-    cleaned = "".join(c if c.isalnum() or c in " -_" else "_" for c in name).strip()
-    return cleaned[:80] or "clip"
-
-
 def _copy_to_output_folder(clip, final_path: Path, subtitle_path: str | None, output_folder: str) -> None:
-    destination_dir = Path(output_folder)
-    destination_dir.mkdir(parents=True, exist_ok=True)
-
-    base_name = clip["id"]
-    if clip["analysis_json"]:
-        try:
-            base_name = json.loads(clip["analysis_json"]).get("suggested_title") or base_name
-        except json.JSONDecodeError:
-            pass
-    base_name = _safe_filename(base_name)
-
-    shutil.copyfile(final_path, destination_dir / f"{base_name}.mp4")
-    if subtitle_path:
-        shutil.copyfile(subtitle_path, destination_dir / f"{base_name}.srt")
+    copy_clip_to_folder(clip, final_path, subtitle_path, output_folder)
 
 
 def _burn_subtitles_for_clip(

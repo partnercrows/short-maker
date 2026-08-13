@@ -11,6 +11,7 @@ import {
   type Job,
   type Project,
 } from "./api";
+import ClipResultCard from "./ClipResultCard";
 import { t, type Language } from "./i18n";
 import { notify } from "./notify";
 import { setActiveJob } from "./jobStatusStore";
@@ -81,23 +82,6 @@ function StepBar({ current, language }: { current: number; language: Language })
       })}
     </div>
   );
-}
-
-function parseAnalysis(clip: Clip) {
-  if (!clip.analysis_json) return null;
-  try {
-    const a = JSON.parse(clip.analysis_json);
-    return {
-      reason: a.reason as string,
-      suggestedTitle: a.suggested_title as string,
-      hook: a.hook_score as number,
-      curiosity: a.curiosity_score as number,
-      emotion: a.emotion_score as number,
-      information: a.information_score as number,
-    };
-  } catch {
-    return null;
-  }
 }
 
 interface Props {
@@ -438,45 +422,16 @@ export default function AiClipperView({ settings, onSettingsChange, openProject 
             </button>
           </div>
 
-          {clips.map((clip) => {
-            const analysis = parseAnalysis(clip);
-            const genJob = generateJobs[clip.id];
-            return (
-              <div key={clip.id} className="max-w-xl rounded border border-neutral-200 p-4 dark:border-neutral-800">
-                <div className="flex justify-between">
-                  <span className="font-medium">{analysis?.suggestedTitle ?? "(untitled)"}</span>
-                  <span className="text-purple-600 dark:text-purple-400">{clip.score?.toFixed(0)}/100</span>
-                </div>
-                <div className="text-xs text-neutral-500">
-                  {clip.start_time.toFixed(1)}s - {clip.end_time.toFixed(1)}s ({clip.duration.toFixed(1)}s) --{" "}
-                  {t(lang, "status_label")}: {clip.status}
-                </div>
-                {analysis && (
-                  <>
-                    <p className="mt-2 text-sm text-neutral-700 dark:text-neutral-300">{analysis.reason}</p>
-                    <div className="mt-1 text-xs text-neutral-500">
-                      Hook {analysis.hook} / Curiosity {analysis.curiosity} / Emotion {analysis.emotion} / Info {analysis.information}
-                    </div>
-                  </>
-                )}
-                <div className="mt-3 flex items-center gap-2">
-                  <button
-                    className="rounded bg-neutral-100 px-3 py-1.5 text-sm hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
-                    onClick={() => handleGenerate(clip.id, true)}
-                    disabled={genJob?.status === "queued" || genJob?.status === "running"}
-                  >
-                    {t(lang, "generate_with_subtitle")}
-                  </button>
-                  {genJob && (
-                    <span className="text-xs text-neutral-500">
-                      {genJob.status}: {genJob.current_step ?? ""} ({genJob.progress.toFixed(0)}%)
-                    </span>
-                  )}
-                </div>
-                {clip.video_path && <div className="mt-2 break-all text-xs text-green-600 dark:text-green-400">{clip.video_path}</div>}
-              </div>
-            );
-          })}
+          {clips.map((clip) => (
+            <ClipResultCard
+              key={clip.id}
+              lang={lang}
+              clip={clip}
+              genJob={generateJobs[clip.id]}
+              provider={provider}
+              onGenerate={handleGenerate}
+            />
+          ))}
         </div>
       )}
     </div>
