@@ -120,6 +120,12 @@ export default function AiClipperView({ settings, onSettingsChange, openProject 
   function setProvider(next: AppSettings["provider"]) {
     onSettingsChange({ ...settings, provider: next });
   }
+  const isProviderConfigured =
+    provider.apiKey.trim() !== "" && provider.model.trim() !== "" && (provider.providerType !== "custom" || provider.baseUrl.trim() !== "");
+  // Collapsed into a one-line summary when a provider is already configured
+  // (usually from Settings) so this step doesn't re-ask for it every time --
+  // "Ubah" expands it back out for editing.
+  const [editingProvider, setEditingProvider] = useState(!isProviderConfigured);
   const [clipCountOption, setClipCountOption] = useState<(typeof CLIP_COUNT_OPTIONS)[number]>("auto");
 
   const [project, setProject] = useState<Project | null>(null);
@@ -326,7 +332,40 @@ export default function AiClipperView({ settings, onSettingsChange, openProject 
             {project.name} ({project.source_duration?.toFixed(0)}s, {project.source_resolution})
           </div>
 
-          <ProviderConfigFields lang={lang} value={provider} disabled={analyzing} onChange={setProvider} />
+          {isProviderConfigured && !editingProvider ? (
+            <div className="flex items-center justify-between rounded border border-green-200 bg-green-50 p-3 text-sm dark:border-green-900 dark:bg-green-950">
+              <div>
+                <div className="font-medium text-green-700 dark:text-green-400">✓ {t(lang, "provider_configured")}</div>
+                <div className="text-xs text-neutral-500">
+                  {provider.providerType === "custom" ? "Custom" : provider.providerType} · {provider.model}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="text-sm text-purple-600 hover:underline disabled:opacity-50 dark:text-purple-400"
+                onClick={() => setEditingProvider(true)}
+                disabled={analyzing}
+              >
+                {t(lang, "change_provider")}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {isProviderConfigured && (
+                <div className="text-right">
+                  <button
+                    type="button"
+                    className="text-xs text-neutral-500 hover:underline"
+                    onClick={() => setEditingProvider(false)}
+                    disabled={analyzing}
+                  >
+                    ▲ {t(lang, "hide_provider_form")}
+                  </button>
+                </div>
+              )}
+              <ProviderConfigFields lang={lang} value={provider} disabled={analyzing} onChange={setProvider} />
+            </div>
+          )}
 
           <div>
             <Label text={t(lang, "num_clips")} />

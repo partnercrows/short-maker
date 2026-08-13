@@ -54,6 +54,18 @@ def ffprobe_path() -> str:
     return _find_binary("ffprobe")
 
 
+def probe_duration(path: str) -> float:
+    """Duration in seconds -- works for an audio-only file too, unlike
+    `probe_metadata()` which requires a video stream."""
+    result = subprocess.run(
+        [ffprobe_path(), "-v", "error", "-show_entries", "format=duration", "-of", "json", path],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return float(json.loads(result.stdout)["format"]["duration"])
+
+
 class VideoMetadata:
     def __init__(self, duration: float, width: int, height: int, fps: float) -> None:
         self.duration = duration
@@ -108,6 +120,29 @@ def extract_audio(video_path: str, output_wav_path: str, sample_rate: int = 1600
             "-ar",
             str(sample_rate),
             output_wav_path,
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def slice_audio(audio_path: str, start: float, duration: float, output_path: str) -> None:
+    """Lossless sub-range cut of an audio file (no re-encode) -- used to
+    split long audio into smaller pieces before handing it to Whisper."""
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            ffmpeg_path(),
+            "-y",
+            "-i",
+            audio_path,
+            "-ss",
+            str(start),
+            "-t",
+            str(duration),
+            "-c",
+            "copy",
+            output_path,
         ],
         check=True,
         capture_output=True,

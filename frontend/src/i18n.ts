@@ -31,6 +31,9 @@ const dict = {
   testing_connection: { id: "Menguji koneksi...", en: "Testing connection..." },
   api_key_valid: { id: "API Key valid!", en: "API Key is valid!" },
   api_key_invalid: { id: "API Key tidak valid", en: "API Key is invalid" },
+  provider_configured: { id: "Provider AI sudah diatur", en: "AI provider already configured" },
+  change_provider: { id: "Ubah", en: "Change" },
+  hide_provider_form: { id: "Sembunyikan", en: "Hide" },
   num_clips: { id: "Jumlah klip", en: "Number of clips" },
   num_clips_hint: {
     id: '"Auto" membiarkan AI menentukan jumlah klip terbaik dari video ini.',
