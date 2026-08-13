@@ -43,7 +43,8 @@ const dict = {
   analyzing: { id: "Menganalisa...", en: "Analyzing..." },
   generating: { id: "Membuat klip...", en: "Generating clip..." },
 
-  generate_with_subtitle: { id: "Generate (dengan subtitle)", en: "Generate (with subtitles)" },
+  generate: { id: "Generate", en: "Generate" },
+  include_subtitle: { id: "Sertakan subtitle", en: "Include subtitles" },
   status_label: { id: "status", en: "status" },
 
   background_jobs_running: { id: "Sedang berjalan di background", en: "Running in background" },

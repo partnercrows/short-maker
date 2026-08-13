@@ -35,6 +35,7 @@ export default function ClipResultCard({ lang, clip, genJob, provider, onGenerat
   const analysis = parseAnalysis(clip);
   const [showPreview, setShowPreview] = useState(false);
   const [showSocialKit, setShowSocialKit] = useState(false);
+  const [includeSubtitle, setIncludeSubtitle] = useState(true);
   const [downloadStatus, setDownloadStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
@@ -77,11 +78,20 @@ export default function ClipResultCard({ lang, clip, genJob, provider, onGenerat
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           className="rounded bg-neutral-100 px-3 py-1.5 text-sm hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-neutral-800 dark:hover:bg-neutral-700"
-          onClick={() => onGenerate(clip.id, true)}
+          onClick={() => onGenerate(clip.id, includeSubtitle)}
           disabled={isGenerating}
         >
-          {t(lang, "generate_with_subtitle")}
+          {t(lang, "generate")}
         </button>
+        <label className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-400">
+          <input
+            type="checkbox"
+            checked={includeSubtitle}
+            disabled={isGenerating}
+            onChange={(e) => setIncludeSubtitle(e.target.checked)}
+          />
+          {t(lang, "include_subtitle")}
+        </label>
 
         {clip.video_path && (
           <>
