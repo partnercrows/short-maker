@@ -1,0 +1,18 @@
+{
+  "name": "short-maker",
+  "version": "0.1.0",
+  "description": "Desktop AI video clipper: landscape to vertical shorts",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}

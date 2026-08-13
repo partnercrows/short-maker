@@ -1,0 +1,47 @@
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Python / backend
+backend/.venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+backend/build/dist/
+backend/*.spec.bak
+
+# Local data
+*.db
+*.db-journal
+ShortMakerData/
+temp/
+logs/
+
+# Source test footage and generated spike media (large binaries, not source code)
+/video/
+backend/spike/thumbnails/
+backend/spike/clips/
+backend/spike/clip_previews/
+backend/spike/output/
+backend/spike/output_previews/
+backend/spike/e2e/
+backend/spike/*.png
+backend/spike/*.task
+backend/spike/*.onnx
+backend/spike/**/*.mp4
+backend/spike/**/*.wav
+
+# Env / secrets
+.env
+.env.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
