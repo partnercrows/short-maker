@@ -48,7 +48,9 @@ def generate_clip(clip_id: str, payload: GenerateClipRequest) -> Job:
     clip = get_clip(clip_id)  # 404s if missing
     job = job_manager.create(JobType.GENERATE_CLIP, project_id=clip.project_id)
     thread = threading.Thread(
-        target=run_generate_job, args=(job.id, clip_id, payload.include_subtitle), daemon=True
+        target=run_generate_job,
+        args=(job.id, clip_id, payload.include_subtitle, payload.output_folder),
+        daemon=True,
     )
     thread.start()
     return job

@@ -1,0 +1,113 @@
+export type Language = "id" | "en";
+
+const dict = {
+  nav_ai_clipper: { id: "AI Clipper", en: "AI Clipper" },
+  nav_history: { id: "Riwayat", en: "History" },
+  nav_settings: { id: "Pengaturan", en: "Settings" },
+
+  step_project: { id: "Proyek", en: "Project" },
+  step_analyze: { id: "Analisa", en: "Analyze" },
+  step_clips: { id: "Klip", en: "Clips" },
+
+  project_name: { id: "Nama proyek", en: "Project name" },
+  video_path: { id: "Path video lokal", en: "Local video path" },
+  browse: { id: "Cari...", en: "Browse..." },
+  choose_video_placeholder: { id: "Pilih file video...", en: "Choose a video file..." },
+  next: { id: "Lanjut →", en: "Next →" },
+  back: { id: "← Kembali", en: "← Back" },
+
+  provider: { id: "Provider", en: "Provider" },
+  model: { id: "Model", en: "Model" },
+  api_key: { id: "API Key", en: "API Key" },
+  base_url: { id: "Base URL", en: "Base URL" },
+  base_url_hint_default: { id: "Kosongkan untuk pakai default provider", en: "Leave blank to use the provider's default" },
+  base_url_hint_custom: { id: "https://endpoint-kamu/v1", en: "https://your-endpoint/v1" },
+  num_clips: { id: "Jumlah klip", en: "Number of clips" },
+  num_clips_hint: {
+    id: '"Auto" membiarkan AI menentukan jumlah klip terbaik dari video ini.',
+    en: '"Auto" lets the AI decide how many clips are actually worth making from this video.',
+  },
+  analyze: { id: "Analisa →", en: "Analyze →" },
+  analyzing: { id: "Menganalisa...", en: "Analyzing..." },
+
+  generate_with_subtitle: { id: "Generate (dengan subtitle)", en: "Generate (with subtitles)" },
+  status_label: { id: "status", en: "status" },
+
+  save_settings_apply_defaults: {
+    id: "Pengaturan default AI provider diterapkan otomatis di step Analisa.",
+    en: "Default AI provider settings are applied automatically on the Analyze step.",
+  },
+
+  settings_appearance: { id: "Tampilan", en: "Appearance" },
+  settings_theme: { id: "Tema", en: "Theme" },
+  settings_theme_light: { id: "Terang", en: "Light" },
+  settings_theme_dark: { id: "Gelap", en: "Dark" },
+  settings_language: { id: "Bahasa", en: "Language" },
+
+  settings_ai_provider: { id: "AI Provider Default", en: "Default AI Provider" },
+  settings_ai_provider_hint: {
+    id: "Disimpan di perangkat ini saja (belum di secure storage OS).",
+    en: "Stored on this device only (not yet in OS secure storage).",
+  },
+
+  settings_output: { id: "Folder Output", en: "Output Folder" },
+  settings_output_hint: {
+    id: "Klip yang sudah selesai digenerate akan disalin juga ke folder ini.",
+    en: "Finished generated clips will also be copied to this folder.",
+  },
+  settings_output_placeholder: { id: "(default: folder Downloads)", en: "(default: Downloads folder)" },
+
+  settings_performance: { id: "Performa", en: "Performance" },
+  settings_gpu_checking: { id: "Mengecek perangkat...", en: "Checking device..." },
+  settings_gpu_recheck: { id: "Cek Ulang", en: "Recheck" },
+  settings_gpu_check_failed: { id: "Gagal mengecek perangkat", en: "Failed to check device" },
+  settings_gpu_use: { id: "Gunakan GPU untuk transkripsi (Whisper)", en: "Use GPU for transcription (Whisper)" },
+  settings_gpu_not_available: {
+    id: "Tidak ada GPU yang cocok terdeteksi -- akan otomatis pakai CPU.",
+    en: "No suitable GPU detected -- will automatically use CPU.",
+  },
+  settings_gpu_speedup: {
+    id: "Diukur di perangkat ini: ~2.6x lebih cepat (video 5 menit: 86s -> 33s pada model \"base\"). Hasil nyata bisa berbeda tergantung GPU.",
+    en: 'Measured on this device: ~2.6x faster (5-min video: 86s -> 33s on the "base" model). Real results vary by GPU.',
+  },
+
+  cancel: { id: "Batalkan", en: "Cancel" },
+  eta_remaining: { id: "estimasi sisa", en: "estimated remaining" },
+  eta_calculating: { id: "menghitung estimasi...", en: "estimating..." },
+
+  notif_analyze_done_title: { id: "Analisa selesai", en: "Analysis complete" },
+  notif_analyze_done_body: { id: "Ditemukan {n} klip kandidat.", en: "Found {n} candidate clips." },
+  notif_analyze_failed_title: { id: "Analisa gagal", en: "Analysis failed" },
+  notif_generate_done_title: { id: "Klip selesai dibuat", en: "Clip generated" },
+  notif_generate_failed_title: { id: "Gagal membuat klip", en: "Clip generation failed" },
+
+  settings_update: { id: "Pembaruan Aplikasi", en: "App Updates" },
+  settings_update_current_version: { id: "Versi saat ini", en: "Current version" },
+  settings_update_check: { id: "Cek Pembaruan", en: "Check for Updates" },
+  settings_update_not_configured: {
+    id: "Saluran rilis belum disiapkan -- fitur ini akan aktif setelah repo & proses rilis publik tersedia.",
+    en: "No release channel configured yet -- this will activate once a public repo & release process exist.",
+  },
+  settings_update_up_to_date: { id: "Sudah pakai versi terbaru.", en: "You're on the latest version." },
+  settings_update_check_failed: { id: "Gagal mengecek pembaruan", en: "Failed to check for updates" },
+  settings_update_available: { id: "Pembaruan tersedia", en: "Update available" },
+  settings_update_install: { id: "Install & Restart", en: "Install & Restart" },
+  settings_update_installing: { id: "Menginstall...", en: "Installing..." },
+
+  settings_save: { id: "Simpan", en: "Save" },
+  settings_saved: { id: "Tersimpan.", en: "Saved." },
+
+  history_empty: { id: "Belum ada proyek.", en: "No projects yet." },
+  history_open: { id: "Buka Proyek", en: "Open Project" },
+  history_created: { id: "Dibuat", en: "Created" },
+  history_duration: { id: "Durasi", en: "Duration" },
+  history_status: { id: "Status", en: "Status" },
+
+  footer_copyright: { id: "Hak Cipta", en: "Copyright" },
+} as const;
+
+export type TranslationKey = keyof typeof dict;
+
+export function t(lang: Language, key: TranslationKey): string {
+  return dict[key][lang];
+}

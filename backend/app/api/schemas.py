@@ -8,10 +8,12 @@ from app.ai_providers.registry import ProviderConfig
 class AnalyzeRequest(BaseModel):
     provider: ProviderConfig
     num_clips: int | None = None  # None = let the AI decide how many clips to make
+    use_gpu: bool = False  # GPU-accelerated Whisper transcription, if the device supports it
 
 
 class GenerateClipRequest(BaseModel):
     include_subtitle: bool = False
+    output_folder: str | None = None  # if set, the finished clip (+ subtitle) is also copied here
 
 
 class ProjectCreate(BaseModel):

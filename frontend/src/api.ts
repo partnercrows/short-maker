@@ -10,22 +10,36 @@ async function getToken(): Promise<string> {
   return cachedToken!;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+async function request<T>(path: string, options: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
   const token = await getToken();
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...options.headers,
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...options.headers,
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    }
+    if (res.status === 204) return undefined as T;
+    return res.json();
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${path}`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeout);
   }
-  if (res.status === 204) return undefined as T;
-  return res.json();
 }
 
 export interface Project {
@@ -35,6 +49,7 @@ export interface Project {
   source_duration: number | null;
   source_resolution: string | null;
   status: string;
+  created_at: string;
 }
 
 export interface Job {
@@ -45,6 +60,7 @@ export interface Job {
   progress: number;
   current_step: string | null;
   error: string | null;
+  started_at: string | null;
 }
 
 export interface Clip {
@@ -68,32 +84,59 @@ export interface ProviderConfig {
 }
 
 export function createProject(name: string, sourceVideoPath: string): Promise<Project> {
-  return request("/projects", {
+  // Longer timeout: this copies the source video into project storage server-side,
+  // which can take a while for a large file.
+  return request(
+    "/projects",
+    { method: "POST", body: JSON.stringify({ name, source_video_path: sourceVideoPath }) },
+    10 * 60_000,
+  );
+}
+
+export function analyzeProject(
+  projectId: string,
+  provider: ProviderConfig,
+  numClips: number | null,
+  useGpu: boolean,
+): Promise<Job> {
+  return request(`/projects/${projectId}/analyze`, {
     method: "POST",
-    body: JSON.stringify({ name, source_video_path: sourceVideoPath }),
+    body: JSON.stringify({ provider, num_clips: numClips, use_gpu: useGpu }),
   });
 }
 
-export function analyzeProject(projectId: string, provider: ProviderConfig, numClips: number | null): Promise<Job> {
-  return request(`/projects/${projectId}/analyze`, {
-    method: "POST",
-    body: JSON.stringify({ provider, num_clips: numClips }),
-  });
+export function listProjects(): Promise<Project[]> {
+  return request("/projects");
+}
+
+export interface SystemCapabilities {
+  gpu_name: string | null;
+  cuda_device_count: number;
+  gpu_transcription_ready: boolean;
+  detail: string;
+}
+
+export function getCapabilities(): Promise<SystemCapabilities> {
+  return request("/system/capabilities");
 }
 
 export function listClips(projectId: string): Promise<Clip[]> {
   return request(`/clips?project_id=${projectId}`);
 }
 
-export function generateClip(clipId: string, includeSubtitle: boolean): Promise<Job> {
+export function generateClip(clipId: string, includeSubtitle: boolean, outputFolder?: string): Promise<Job> {
   return request(`/clips/${clipId}/generate`, {
     method: "POST",
-    body: JSON.stringify({ include_subtitle: includeSubtitle }),
+    body: JSON.stringify({ include_subtitle: includeSubtitle, output_folder: outputFolder || undefined }),
   });
 }
 
 export function getJob(jobId: string): Promise<Job> {
   return request(`/jobs/${jobId}`);
+}
+
+export function cancelJob(jobId: string): Promise<Job> {
+  return request(`/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
 export async function pollJob(jobId: string, onUpdate: (job: Job) => void): Promise<Job> {

@@ -7,6 +7,7 @@ queued->running->completed/failed lifecycle every job uses.
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +32,25 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def run_analyze_job(job_id: str, project_id: str, provider: ProviderConfig, num_clips: int | None) -> None:
+def _format_mmss(seconds: float) -> str:
+    minutes, secs = divmod(max(0, int(seconds)), 60)
+    return f"{minutes}:{secs:02d}"
+
+
+class JobCancelled(Exception):
+    """Raised internally to unwind a job after the user cancels it.
+    `job_manager.cancel()` already set the job's status/finished_at --
+    this just stops the work from continuing, it isn't a failure."""
+
+
+def _raise_if_cancelled(job_id: str) -> None:
+    if job_manager.is_cancelled(job_id):
+        raise JobCancelled()
+
+
+def run_analyze_job(
+    job_id: str, project_id: str, provider: ProviderConfig, num_clips: int | None, use_gpu: bool = False
+) -> None:
     settings = get_settings()
     try:
         job_manager.start(job_id)
@@ -46,20 +65,39 @@ def run_analyze_job(job_id: str, project_id: str, provider: ProviderConfig, num_
         job_manager.update_progress(job_id, 10, "Extracting audio")
         audio_path = analysis_dir / "audio.wav"
         extract_audio(project["source_video_path"], str(audio_path))
+        _raise_if_cancelled(job_id)
 
-        job_manager.update_progress(job_id, 30, "Transcribing")
-        transcript = get_transcriber().transcribe(str(audio_path))
+        total_duration = project["source_duration"] or 0.0
+        job_manager.update_progress(job_id, 30, f"Transcribing (0:00 / {_format_mmss(total_duration)})")
+
+        def on_transcribe_progress(fraction: float) -> None:
+            _raise_if_cancelled(job_id)
+            elapsed = fraction * total_duration
+            step_label = f"Transcribing ({_format_mmss(elapsed)} / {_format_mmss(total_duration)})"
+            job_manager.update_progress(job_id, 30 + fraction * 30, step_label)
+
+        try:
+            transcriber = get_transcriber("cuda", "float16") if use_gpu else get_transcriber()
+        except Exception:  # noqa: BLE001 -- GPU requested but not actually usable; don't fail the whole job over it
+            job_manager.update_progress(job_id, 30, "GPU unavailable, falling back to CPU for transcription")
+            transcriber = get_transcriber()
+
+        transcript = transcriber.transcribe(str(audio_path), on_progress=on_transcribe_progress)
         (analysis_dir / "transcript.json").write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
+        _raise_if_cancelled(job_id)
 
-        job_manager.update_progress(job_id, 60, "Finding best moments")
+        job_manager.update_progress(job_id, 60, "Finding best moments (waiting for AI provider)")
         candidates = select_clips(provider, transcript, num_clips, video_duration=project["source_duration"])
         (analysis_dir / "clips.json").write_text(json.dumps([c.model_dump() for c in candidates], indent=2), encoding="utf-8")
+        _raise_if_cancelled(job_id)
 
         job_manager.update_progress(job_id, 90, "Saving candidate clips")
         _save_candidate_clips(project_id, candidates, transcript)
 
         job_manager.update_progress(job_id, 100, "Done")
         job_manager.complete(job_id)
+    except JobCancelled:
+        return
     except Exception as exc:  # noqa: BLE001 -- reported through the job row, not raised into a thread nobody awaits
         job_manager.fail(job_id, str(exc))
 
@@ -96,7 +134,7 @@ def _save_candidate_clips(project_id: str, candidates: list, transcript: Transcr
         conn.commit()
 
 
-def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool) -> None:
+def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool, output_folder: str | None = None) -> None:
     settings = get_settings()
     try:
         job_manager.start(job_id)
@@ -114,6 +152,7 @@ def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool) -> None:
 
         job_manager.update_progress(job_id, 15, "Cutting segment")
         cut_subclip(project["source_video_path"], clip["start_time"], clip["duration"], str(subclip_path))
+        _raise_if_cancelled(job_id)
 
         job_manager.update_progress(job_id, 30, "Resolving active speaker crop")
         metadata = probe_metadata(str(subclip_path))
@@ -125,9 +164,11 @@ def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool) -> None:
             target_width=TARGET_WIDTH,
             target_height=TARGET_HEIGHT,
         )
+        _raise_if_cancelled(job_id)
 
         job_manager.update_progress(job_id, 55, "Rendering")
         render_clip(str(subclip_path), plan, str(rendered_path), TARGET_WIDTH, TARGET_HEIGHT)
+        _raise_if_cancelled(job_id)
 
         subtitle_path: str | None = None
         if include_subtitle:
@@ -149,13 +190,43 @@ def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool) -> None:
             )
             conn.commit()
 
+        if output_folder:
+            job_manager.update_progress(job_id, 95, "Copying to output folder")
+            _copy_to_output_folder(clip, final_path, subtitle_path, output_folder)
+
         job_manager.update_progress(job_id, 100, "Done")
         job_manager.complete(job_id)
+    except JobCancelled:
+        with get_connection() as conn:
+            conn.execute("UPDATE clips SET status = 'candidate', updated_at = ? WHERE id = ?", (_now(), clip_id))
+            conn.commit()
     except Exception as exc:  # noqa: BLE001 -- reported through the job row
         job_manager.fail(job_id, str(exc))
         with get_connection() as conn:
             conn.execute("UPDATE clips SET status = 'failed', updated_at = ? WHERE id = ?", (_now(), clip_id))
             conn.commit()
+
+
+def _safe_filename(name: str) -> str:
+    cleaned = "".join(c if c.isalnum() or c in " -_" else "_" for c in name).strip()
+    return cleaned[:80] or "clip"
+
+
+def _copy_to_output_folder(clip, final_path: Path, subtitle_path: str | None, output_folder: str) -> None:
+    destination_dir = Path(output_folder)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    base_name = clip["id"]
+    if clip["analysis_json"]:
+        try:
+            base_name = json.loads(clip["analysis_json"]).get("suggested_title") or base_name
+        except json.JSONDecodeError:
+            pass
+    base_name = _safe_filename(base_name)
+
+    shutil.copyfile(final_path, destination_dir / f"{base_name}.mp4")
+    if subtitle_path:
+        shutil.copyfile(subtitle_path, destination_dir / f"{base_name}.srt")
 
 
 def _burn_subtitles_for_clip(

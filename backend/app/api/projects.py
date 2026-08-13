@@ -82,7 +82,9 @@ def analyze_project(project_id: str, payload: AnalyzeRequest) -> Job:
     get_project(project_id)  # 404s if missing, before we bother creating a job
     job = job_manager.create(JobType.ANALYZE_VIDEO, project_id=project_id)
     thread = threading.Thread(
-        target=run_analyze_job, args=(job.id, project_id, payload.provider, payload.num_clips), daemon=True
+        target=run_analyze_job,
+        args=(job.id, project_id, payload.provider, payload.num_clips, payload.use_gpu),
+        daemon=True
     )
     thread.start()
     return job

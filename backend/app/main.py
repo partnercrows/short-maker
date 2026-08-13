@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import ai_providers, clips, jobs, projects, social_kit, subtitles
+from app.api import ai_providers, clips, jobs, projects, social_kit, subtitles, system
+from app.core.gpu_utils import ensure_cuda_dlls_on_path
 from app.core.security import get_or_create_api_token
 from app.db.connection import init_db
 
@@ -14,6 +15,7 @@ from app.db.connection import init_db
 async def lifespan(_: FastAPI):
     init_db()
     get_or_create_api_token()  # ensures the token file exists for the Tauri shell to read
+    ensure_cuda_dlls_on_path()
     yield
 
 
@@ -54,3 +56,4 @@ app.include_router(jobs.router)
 app.include_router(ai_providers.router)
 app.include_router(subtitles.router)
 app.include_router(social_kit.router)
+app.include_router(system.router)
