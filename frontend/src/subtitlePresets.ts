@@ -17,6 +17,10 @@ export const SUBTITLE_PRESETS: Record<string, SubtitleStyle> = {
     stroke: { enabled: true, color: "#000000", width: 3 },
     shadow: { enabled: false, color: "#000000", opacity: 0.5, blur: 4, offset_x: 2, offset_y: 2 },
     glow: { enabled: false, color: "#FFFFFF", opacity: 0.8, blur: 8, spread: 2 },
+    uppercase: false,
+    italic: false,
+    display_mode: "sentence",
+    highlight_color: "#FFE600",
   },
   editorial: {
     preset: "editorial",
@@ -30,6 +34,10 @@ export const SUBTITLE_PRESETS: Record<string, SubtitleStyle> = {
     stroke: { enabled: true, color: "#000000", width: 2 },
     shadow: { enabled: true, color: "#000000", opacity: 0.5, blur: 4, offset_x: 1, offset_y: 1 },
     glow: { enabled: false, color: "#FFFFFF", opacity: 0.8, blur: 8, spread: 2 },
+    uppercase: false,
+    italic: false,
+    display_mode: "sentence",
+    highlight_color: "#FFE600",
   },
   bold_pop: {
     preset: "bold_pop",
@@ -43,6 +51,10 @@ export const SUBTITLE_PRESETS: Record<string, SubtitleStyle> = {
     stroke: { enabled: true, color: "#FF2D55", width: 4 },
     shadow: { enabled: false, color: "#000000", opacity: 0.5, blur: 4, offset_x: 2, offset_y: 2 },
     glow: { enabled: true, color: "#FF2D55", opacity: 0.6, blur: 10, spread: 3 },
+    uppercase: false,
+    italic: false,
+    display_mode: "sentence",
+    highlight_color: "#FFE600",
   },
   newsroom: {
     preset: "newsroom",
@@ -56,6 +68,10 @@ export const SUBTITLE_PRESETS: Record<string, SubtitleStyle> = {
     stroke: { enabled: false, color: "#000000", width: 2 },
     shadow: { enabled: false, color: "#000000", opacity: 0.5, blur: 4, offset_x: 2, offset_y: 2 },
     glow: { enabled: false, color: "#FFFFFF", opacity: 0.8, blur: 8, spread: 2 },
+    uppercase: false,
+    italic: false,
+    display_mode: "sentence",
+    highlight_color: "#FFE600",
   },
 };
 

@@ -341,6 +341,10 @@ export interface SubtitleStyle {
   stroke: SubtitleStroke;
   shadow: SubtitleShadow;
   glow: SubtitleGlow;
+  uppercase: boolean;
+  italic: boolean;
+  display_mode: "sentence" | "karaoke";
+  highlight_color: string;
 }
 
 export interface SubtitleDocumentLine {

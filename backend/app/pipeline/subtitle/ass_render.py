@@ -49,6 +49,7 @@ def _ass_timestamp(seconds: float) -> str:
 
 def _style_line(name: str, style: SubtitleStyle) -> str:
     bold = -1 if style.font_weight >= 600 else 0
+    italic = -1 if style.italic else 0
     primary = _hex_to_ass_color(style.text_color)
 
     if style.background.enabled:
@@ -71,17 +72,22 @@ def _style_line(name: str, style: SubtitleStyle) -> str:
 
     return (
         f"Style: {name},{style.font_family},{style.font_size},{primary},{primary},"
-        f"{outline_colour},{back_colour},{bold},0,0,0,100,100,0,0,"
+        f"{outline_colour},{back_colour},{bold},{italic},0,0,100,100,0,0,"
         f"{border_style},{outline},{shadow},5,0,0,0,1"
     )
 
 
-def _dialogue_events(line: SubtitleDocumentLine, style: SubtitleStyle, style_name: str) -> list[str]:
+def _line_text(line: SubtitleDocumentLine, style: SubtitleStyle) -> str:
+    text = line.text.upper() if style.uppercase else line.text
+    return text.replace("\n", "\\N")
+
+
+def _sentence_dialogue_events(line: SubtitleDocumentLine, style: SubtitleStyle, style_name: str) -> list[str]:
     an = _alignment_code(style.alignment)
     pos = f"\\an{an}\\pos({style.position.x:.0f},{style.position.y:.0f})"
     start = _ass_timestamp(line.start)
     end = _ass_timestamp(line.end)
-    text = line.text.replace("\n", "\\N")
+    text = _line_text(line, style)
 
     events = []
     if style.glow.enabled:
@@ -90,6 +96,47 @@ def _dialogue_events(line: SubtitleDocumentLine, style: SubtitleStyle, style_nam
         events.append(f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,{glow_tags}{text}")
     events.append(f"Dialogue: 1,{start},{end},{style_name},,0,0,0,,{{{pos}}}{text}")
     return events
+
+
+def _karaoke_dialogue_events(line: SubtitleDocumentLine, style: SubtitleStyle, style_name: str) -> list[str]:
+    """One Dialogue event per word, each spanning [this word's start, the
+    next word's start] (or the line's own end for the last word), showing
+    the full line with only the active word wrapped in a `\\c` colour
+    override -- the same technique as ASS glow (models.py's `SubtitleGlow`),
+    just applied per-word instead of per-line."""
+    if not line.words:
+        # No per-word timestamps (e.g. a manually-added line) -- there's
+        # nothing to highlight word-by-word, so render it as a sentence.
+        return _sentence_dialogue_events(line, style, style_name)
+
+    an = _alignment_code(style.alignment)
+    pos = f"\\an{an}\\pos({style.position.x:.0f},{style.position.y:.0f})"
+    primary = _hex_to_ass_color(style.text_color)
+    highlight = _hex_to_ass_color(style.highlight_color)
+    words = line.words
+    num_words = len(words)
+
+    events = []
+    for i, word in enumerate(words):
+        w_start = word.start
+        w_end = words[i + 1].start if i < num_words - 1 else line.end
+        if w_end <= w_start:
+            continue
+        parts = []
+        for j, w in enumerate(words):
+            word_text = w.text.upper() if style.uppercase else w.text
+            parts.append(f"{{\\c{highlight}}}{word_text}{{\\c{primary}}}" if j == i else word_text)
+        text = " ".join(parts)
+        start_ts = _ass_timestamp(w_start)
+        end_ts = _ass_timestamp(w_end)
+        events.append(f"Dialogue: 0,{start_ts},{end_ts},{style_name},,0,0,0,,{{{pos}}}{text}")
+    return events
+
+
+def _dialogue_events(line: SubtitleDocumentLine, style: SubtitleStyle, style_name: str) -> list[str]:
+    if style.display_mode == "karaoke":
+        return _karaoke_dialogue_events(line, style, style_name)
+    return _sentence_dialogue_events(line, style, style_name)
 
 
 def render_ass(document: SubtitleDocument) -> str:

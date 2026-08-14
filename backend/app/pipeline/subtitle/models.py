@@ -63,6 +63,13 @@ class SubtitleStyle(BaseModel):
     stroke: SubtitleStroke = Field(default_factory=SubtitleStroke)
     shadow: SubtitleShadow = Field(default_factory=SubtitleShadow)
     glow: SubtitleGlow = Field(default_factory=SubtitleGlow)
+    uppercase: bool = False
+    italic: bool = False
+    # "karaoke" highlights the word currently being spoken (using each line's
+    # per-word timestamps); falls back to "sentence" rendering for any line
+    # whose `words` weren't captured (e.g. a manually-added line).
+    display_mode: Literal["sentence", "karaoke"] = "sentence"
+    highlight_color: str = "#FFE600"
 
 
 class WordStyleOverride(BaseModel):

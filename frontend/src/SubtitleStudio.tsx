@@ -55,6 +55,8 @@ function buildOverlayStyle(style: SubtitleStyle, scale: number): React.CSSProper
     fontFamily: style.font_family,
     fontSize: `${fontSizePx}px`,
     fontWeight: style.font_weight,
+    fontStyle: style.italic ? "italic" : "normal",
+    textTransform: style.uppercase ? "uppercase" : "none",
     color: style.text_color,
     textAlign: style.alignment,
     whiteSpace: "pre-wrap",
@@ -70,6 +72,17 @@ function buildOverlayStyle(style: SubtitleStyle, scale: number): React.CSSProper
         }
       : {}),
   };
+}
+
+function karaokeActiveWordIndex(line: SubtitleDocumentLine, currentTime: number): number {
+  const words = line.words;
+  if (!words || words.length === 0) return -1;
+  for (let i = 0; i < words.length; i++) {
+    const start = words[i].start;
+    const end = i < words.length - 1 ? words[i + 1].start : line.end;
+    if (currentTime >= start && currentTime < end) return i;
+  }
+  return words.length - 1;
 }
 
 function splitLine(line: SubtitleDocumentLine): [SubtitleDocumentLine, SubtitleDocumentLine] {
@@ -191,7 +204,10 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
 
   function handleTextChange(id: string, text: string) {
     if (!document) return;
-    updateLines(document.lines.map((l) => (l.id === id ? { ...l, text } : l)));
+    // Free-text edits no longer correspond to the original per-word
+    // timestamps, so drop them -- otherwise karaoke mode would highlight
+    // stale words that don't match the edited text.
+    updateLines(document.lines.map((l) => (l.id === id ? { ...l, text, words: null } : l)));
   }
 
   function handleTimingChange(id: string, field: "start" | "end", value: number) {
@@ -373,7 +389,21 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
                       onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
                     />
                     {activeLine && activeStyle && scale > 0 && (
-                      <div style={buildOverlayStyle(activeStyle, scale)}>{activeLine.text}</div>
+                      <div style={buildOverlayStyle(activeStyle, scale)}>
+                        {activeStyle.display_mode === "karaoke" && activeLine.words && activeLine.words.length > 0 ? (
+                          activeLine.words.map((word, i) => {
+                            const isActive = i === karaokeActiveWordIndex(activeLine, currentTime);
+                            return (
+                              <span key={i} style={{ color: isActive ? activeStyle.highlight_color : activeStyle.text_color }}>
+                                {word.text}
+                                {i < activeLine.words!.length - 1 ? " " : ""}
+                              </span>
+                            );
+                          })
+                        ) : (
+                          activeLine.text
+                        )}
+                      </div>
                     )}
                   </div>
                   <p className="mt-1 text-center text-xs text-neutral-500">{t(lang, "subtitle_preview_approximate")}</p>
