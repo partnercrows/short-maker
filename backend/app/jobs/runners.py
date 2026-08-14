@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.ai_providers.registry import ProviderConfig
-from app.core.clip_export import copy_clip_to_folder
+from app.core.clip_export import copy_clip_to_folder, export_clip_to_folder
 from app.core.config import get_settings
 from app.core.ffmpeg_utils import cut_subclip, extract_audio, probe_metadata
 from app.core.gpu_pack import download_gpu_pack
@@ -22,6 +22,7 @@ from app.core.system_capabilities import probe_capabilities
 from app.db.connection import get_connection
 from app.jobs.manager import job_manager
 from app.pipeline.ai_analysis.clip_selector import select_clips
+from app.pipeline.intro import load_intro_frame
 from app.pipeline.reframe.models import ReframeMode
 from app.pipeline.reframe.modes import resolve as resolve_reframe
 from app.pipeline.render import render as render_clip
@@ -316,6 +317,45 @@ def run_render_subtitle_job(job_id: str, clip_id: str) -> None:
                 (str(final_path), str(ass_path), str(subtitle_json_path), now, clip_id),
             )
             conn.commit()
+
+        job_manager.update_progress(job_id, 100, "Done")
+        job_manager.complete(job_id)
+    except JobCancelled:
+        return
+    except Exception as exc:  # noqa: BLE001 -- reported through the job row
+        job_manager.fail(job_id, str(exc))
+
+
+def run_export_clip_job(job_id: str, clip_id: str, destination_folder: str) -> None:
+    """The Download action, upgraded from a synchronous copy to a job so it
+    can also run the (potentially slow) Intro Frame ffmpeg encode. A clip
+    with no intro enabled still just falls through to a plain, near-instant
+    copy inside `export_clip_to_folder` -- one code path either way."""
+    settings = get_settings()
+    try:
+        job_manager.start(job_id)
+        with get_connection() as conn:
+            clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+            if clip is None:
+                raise ValueError(f"Clip not found: {clip_id}")
+        if not clip["video_path"]:
+            raise ValueError("This clip hasn't been generated yet")
+
+        job_manager.update_progress(job_id, 20, "Preparing export")
+        intro_json_path = settings.clip_intro_json_path(clip["project_id"], clip_id)
+        intro = load_intro_frame(intro_json_path) if intro_json_path.is_file() else None
+        intro_image_path = settings.clip_intro_image_path(clip["project_id"], clip_id)
+        _raise_if_cancelled(job_id)
+
+        job_manager.update_progress(job_id, 40, "Exporting" if intro and intro.enabled else "Copying to output folder")
+        export_clip_to_folder(
+            clip,
+            clip["video_path"],
+            clip["subtitle_path"],
+            destination_folder,
+            intro=intro,
+            intro_image_path=intro_image_path if intro_image_path.is_file() else None,
+        )
 
         job_manager.update_progress(job_id, 100, "Done")
         job_manager.complete(job_id)

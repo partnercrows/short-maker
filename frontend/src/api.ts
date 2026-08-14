@@ -23,12 +23,16 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs = D
   const token = await getToken();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // A FormData body (image upload) needs the browser/runtime to set its own
+  // multipart boundary in Content-Type -- forcing application/json here
+  // would break the request.
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
   try {
     const res = await tauriFetch(`${API_BASE}${path}`, {
       ...options,
       signal: controller.signal,
       headers: {
-        "Content-Type": "application/json",
+        ...(isFormData ? {} : { "Content-Type": "application/json" }),
         Authorization: `Bearer ${token}`,
         ...options.headers,
       },
@@ -174,11 +178,49 @@ export function generateClip(clipId: string, includeSubtitle: boolean, outputFol
   });
 }
 
-export function copyClipTo(clipId: string, destinationFolder: string): Promise<void> {
+export function copyClipTo(clipId: string, destinationFolder: string): Promise<Job> {
   return request(`/clips/${clipId}/copy-to`, {
     method: "POST",
     body: JSON.stringify({ destination_folder: destinationFolder }),
   });
+}
+
+export interface IntroFrame {
+  enabled: boolean;
+  source: "captured" | "uploaded";
+  source_timestamp: number | null;
+  duration_seconds: number;
+  created_at: string;
+}
+
+export interface IntroFrameResponse {
+  intro: IntroFrame;
+  image_path: string | null;
+}
+
+export function getIntroFrame(clipId: string): Promise<IntroFrameResponse> {
+  return request(`/clips/${clipId}/intro`);
+}
+
+export function updateIntroFrame(clipId: string, enabled: boolean, durationSeconds: number): Promise<IntroFrameResponse> {
+  return request(`/clips/${clipId}/intro`, {
+    method: "PUT",
+    body: JSON.stringify({ enabled, duration_seconds: durationSeconds }),
+  });
+}
+
+export function captureIntroFrame(clipId: string, timestamp: number, durationSeconds: number): Promise<IntroFrameResponse> {
+  return request(`/clips/${clipId}/intro/capture`, {
+    method: "POST",
+    body: JSON.stringify({ timestamp, duration_seconds: durationSeconds }),
+  });
+}
+
+export function uploadIntroFrame(clipId: string, file: File, durationSeconds: number): Promise<IntroFrameResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("duration_seconds", String(durationSeconds));
+  return request(`/clips/${clipId}/intro/upload`, { method: "POST", body: form });
 }
 
 export interface TitleOption {

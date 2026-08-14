@@ -19,6 +19,7 @@ class JobType(StrEnum):
     RENDER_SUBTITLE = "render_subtitle"
     GENERATE_SOCIAL_KIT = "generate_social_kit"
     DOWNLOAD_GPU_PACK = "download_gpu_pack"
+    EXPORT_CLIP = "export_clip"
 
 
 class Job(BaseModel):

@@ -149,6 +149,39 @@ def slice_audio(audio_path: str, start: float, duration: float, output_path: str
     )
 
 
+def extract_frame(video_path: str, timestamp: float, output_path: str) -> None:
+    """Grabs a single still frame at `timestamp` seconds -- used to seed an
+    Intro Frame image from a clip's own rendered video."""
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            ffmpeg_path(),
+            "-y",
+            "-ss",
+            str(timestamp),
+            "-i",
+            video_path,
+            "-vframes",
+            "1",
+            output_path,
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def convert_image_to_png(input_path: str, output_path: str) -> None:
+    """Re-encodes any ffmpeg-readable image (JPEG/WebP/PNG) to PNG at a fixed
+    path -- used to normalize an uploaded Intro Frame image regardless of the
+    format it was uploaded in."""
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [ffmpeg_path(), "-y", "-i", input_path, "-frames:v", "1", output_path],
+        check=True,
+        capture_output=True,
+    )
+
+
 def cut_subclip(video_path: str, start: float, duration: float, output_path: str) -> None:
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(

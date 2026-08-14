@@ -347,40 +347,43 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
       {error && <div className="mb-3 rounded bg-red-100 p-2 text-xs text-red-700 dark:bg-red-900 dark:text-red-100">{error}</div>}
 
       {!loading && document && (
-        <>
-          {needsRebuild ? (
-            <div className="mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950">
-              <p>{t(lang, "subtitle_needs_rebuild")}</p>
-              <button
-                type="button"
-                className="mt-2 rounded bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-500 disabled:opacity-50"
-                onClick={handleRender}
-                disabled={rendering}
-              >
-                {rendering ? t(lang, "subtitle_rendering") : t(lang, "subtitle_render_now")}
-              </button>
-            </div>
-          ) : (
-            renderedVideoPath && (
-              <div className="mb-3">
-                <div ref={containerRef} className="relative mx-auto max-h-80 w-fit overflow-hidden rounded bg-black">
-                  <video
-                    ref={videoRef}
-                    controls
-                    className="max-h-80"
-                    src={convertFileSrc(renderedVideoPath)}
-                    onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-                  />
-                  {activeLine && activeStyle && scale > 0 && (
-                    <div style={buildOverlayStyle(activeStyle, scale)}>{activeLine.text}</div>
-                  )}
-                </div>
-                <p className="mt-1 text-center text-xs text-neutral-500">{t(lang, "subtitle_preview_approximate")}</p>
+        <div className="grid gap-4 md:grid-cols-[minmax(240px,360px)_1fr] md:items-start">
+          <div className="md:sticky md:top-0">
+            {needsRebuild ? (
+              <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950">
+                <p>{t(lang, "subtitle_needs_rebuild")}</p>
+                <button
+                  type="button"
+                  className="mt-2 rounded bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-500 disabled:opacity-50"
+                  onClick={handleRender}
+                  disabled={rendering}
+                >
+                  {rendering ? t(lang, "subtitle_rendering") : t(lang, "subtitle_render_now")}
+                </button>
               </div>
-            )
-          )}
+            ) : (
+              renderedVideoPath && (
+                <div>
+                  <div ref={containerRef} className="relative mx-auto max-h-[70vh] w-fit overflow-hidden rounded bg-black">
+                    <video
+                      ref={videoRef}
+                      controls
+                      className="max-h-[70vh]"
+                      src={convertFileSrc(renderedVideoPath)}
+                      onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                    />
+                    {activeLine && activeStyle && scale > 0 && (
+                      <div style={buildOverlayStyle(activeStyle, scale)}>{activeLine.text}</div>
+                    )}
+                  </div>
+                  <p className="mt-1 text-center text-xs text-neutral-500">{t(lang, "subtitle_preview_approximate")}</p>
+                </div>
+              )
+            )}
+          </div>
 
-          <div className="max-h-64 space-y-2 overflow-y-auto rounded border border-neutral-200 p-2 dark:border-neutral-800">
+          <div className="min-w-0">
+          <div className="max-h-[60vh] space-y-2 overflow-y-auto rounded border border-neutral-200 p-2 dark:border-neutral-800">
             {document.lines.length === 0 && <p className="text-sm text-neutral-500">{t(lang, "subtitle_no_lines")}</p>}
             {document.lines.map((line, index) => (
               <div key={line.id} className="rounded border border-neutral-200 p-2 text-sm dark:border-neutral-800">
@@ -496,7 +499,8 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
               applying={applying}
             />
           )}
-        </>
+          </div>
+        </div>
       )}
     </div>
   );

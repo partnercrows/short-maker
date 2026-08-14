@@ -218,6 +218,24 @@ const dict = {
     en: "Select lines below to apply a style to specific lines.",
   },
 
+  intro_frame: { id: "Intro Frame", en: "Intro Frame" },
+  intro_panel_title: { id: "Intro Frame", en: "Intro Frame" },
+  intro_enable: { id: "Aktifkan intro sebelum video", en: "Enable intro before the video" },
+  intro_duration: { id: "Durasi (detik)", en: "Duration (seconds)" },
+  intro_source_captured: { id: "Ambil dari video", en: "Capture from video" },
+  intro_source_uploaded: { id: "Unggah gambar", en: "Upload image" },
+  intro_source_social_kit: {
+    id: "Dari Social Kit -- segera hadir",
+    en: "From Social Kit -- coming soon",
+  },
+  intro_use_this_frame: { id: "Gunakan Frame Ini", en: "Use This Frame" },
+  intro_capturing: { id: "Mengambil...", en: "Capturing..." },
+  intro_upload_button: { id: "Pilih Gambar", en: "Choose Image" },
+  intro_uploading: { id: "Mengunggah...", en: "Uploading..." },
+  intro_preview: { id: "▶ Preview", en: "▶ Preview" },
+  intro_current_image: { id: "Gambar intro saat ini", en: "Current intro image" },
+  intro_no_image_yet: { id: "Belum ada gambar intro.", en: "No intro image yet." },
+
   footer_copyright: { id: "Hak Cipta", en: "Copyright" },
 } as const;
 
