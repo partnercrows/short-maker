@@ -12,8 +12,14 @@ backend/.venv/
 backend/__pycache__/
 **/__pycache__/
 *.pyc
-backend/build/dist/
+backend/build/
+backend/dist/
+backend/*.spec
 backend/*.spec.bak
+
+# Standalone backend sidecar binary (built by backend/build_standalone.ps1,
+# not committed -- large, platform-specific, regenerated per build machine)
+src-tauri/binaries/
 
 # Local data
 *.db
