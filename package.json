@@ -1,6 +1,6 @@
 {
   "name": "short-maker",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Desktop AI video clipper: landscape to vertical shorts",
   "private": true,
   "scripts": {

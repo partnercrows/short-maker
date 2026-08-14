@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
-import { getCapabilities, type SystemCapabilities } from "./api";
+import {
+  cancelJob,
+  downloadGpuPack,
+  getCapabilities,
+  getGpuPackStatus,
+  pollJob,
+  type Job,
+  type SystemCapabilities,
+} from "./api";
 import { t } from "./i18n";
+import { notify } from "./notify";
 import ProviderConfigFields from "./ProviderConfigFields";
 import type { AppSettings } from "./settings";
 import { checkForUpdate, type UpdateCheckResult } from "./updater";
@@ -44,6 +53,11 @@ export default function SettingsView({ settings, onChange }: Props) {
   const [capabilitiesStatus, setCapabilitiesStatus] = useState<"loading" | "ready" | "error">("loading");
   const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
 
+  const [gpuPackInstalled, setGpuPackInstalled] = useState<boolean | null>(null);
+  const [gpuPackJob, setGpuPackJob] = useState<Job | null>(null);
+  const [gpuPackError, setGpuPackError] = useState<string | null>(null);
+  const gpuPackDownloading = gpuPackJob?.status === "queued" || gpuPackJob?.status === "running";
+
   function checkCapabilities() {
     setCapabilitiesStatus("loading");
     setCapabilitiesError(null);
@@ -56,6 +70,37 @@ export default function SettingsView({ settings, onChange }: Props) {
         setCapabilitiesStatus("error");
         setCapabilitiesError(String(e));
       });
+    getGpuPackStatus()
+      .then((s) => setGpuPackInstalled(s.installed))
+      .catch(() => setGpuPackInstalled(null));
+  }
+
+  async function handleDownloadGpuPack() {
+    setGpuPackError(null);
+    try {
+      const job = await downloadGpuPack();
+      setGpuPackJob(job);
+      const finished = await pollJob(job.id, setGpuPackJob);
+      if (finished.status === "completed") {
+        setGpuPackInstalled(true);
+        checkCapabilities();
+        notify(t(lang, "notif_gpu_pack_done_title"), "");
+      } else if (finished.status === "failed") {
+        setGpuPackError(finished.error ?? "");
+      }
+    } catch (e) {
+      setGpuPackError(String(e));
+    }
+  }
+
+  async function handleCancelGpuPackDownload() {
+    if (gpuPackJob) {
+      try {
+        await cancelJob(gpuPackJob.id);
+      } catch {
+        // best-effort -- pollJob's loop will still stop once it sees a terminal status
+      }
+    }
   }
 
   useEffect(() => {
@@ -183,19 +228,64 @@ export default function SettingsView({ settings, onChange }: Props) {
             <div className="text-sm text-neutral-600 dark:text-neutral-400">
               {capabilities.gpu_name ?? "CPU only"} {capabilities.gpu_name && `(${capabilities.detail})`}
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={draft.useGpu}
-                disabled={!capabilities.gpu_transcription_ready}
-                onChange={(e) => update("useGpu", e.target.checked)}
-              />
-              {t(lang, "settings_gpu_use")}
-            </label>
-            {!capabilities.gpu_transcription_ready && (
-              <p className="text-xs text-amber-600 dark:text-amber-400">{t(lang, "settings_gpu_not_available")}</p>
+
+            {capabilities.gpu_name && !capabilities.gpu_transcription_ready && gpuPackInstalled === false ? (
+              <div className="rounded border border-purple-200 bg-purple-50 p-3 dark:border-purple-900 dark:bg-purple-950">
+                <p className="text-sm">{t(lang, "settings_gpu_pack_not_installed")}</p>
+                <p className="mt-1 text-xs text-neutral-500">{t(lang, "settings_gpu_pack_first_use_note")}</p>
+                {gpuPackDownloading ? (
+                  <div className="mt-2">
+                    <div className="h-2 w-full overflow-hidden rounded bg-neutral-200 dark:bg-neutral-800">
+                      <div
+                        className="h-full bg-purple-600 transition-all"
+                        style={{ width: `${gpuPackJob?.progress.toFixed(0)}%` }}
+                      />
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-xs text-neutral-500">
+                      <span>
+                        {t(lang, "settings_gpu_pack_downloading")} {gpuPackJob?.progress.toFixed(0)}%
+                      </span>
+                      <button className="text-red-600 hover:underline dark:text-red-400" onClick={handleCancelGpuPackDownload}>
+                        {t(lang, "cancel")}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    className="mt-2 rounded bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-500"
+                    onClick={handleDownloadGpuPack}
+                  >
+                    {t(lang, "settings_gpu_pack_download")}
+                  </button>
+                )}
+                {gpuPackError && (
+                  <div className="mt-2 text-xs text-red-600 dark:text-red-400">
+                    {t(lang, "settings_gpu_pack_failed")}: {gpuPackError}
+                    <button className="ml-2 underline" onClick={handleDownloadGpuPack}>
+                      {t(lang, "history_retry")}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={draft.useGpu}
+                    disabled={!capabilities.gpu_transcription_ready}
+                    onChange={(e) => update("useGpu", e.target.checked)}
+                  />
+                  {t(lang, "settings_gpu_use")}
+                </label>
+                {!capabilities.gpu_transcription_ready && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">{t(lang, "settings_gpu_not_available")}</p>
+                )}
+                {capabilities.gpu_transcription_ready && (
+                  <p className="text-xs text-neutral-500">{t(lang, "settings_gpu_speedup")}</p>
+                )}
+              </>
             )}
-            {capabilities.gpu_transcription_ready && <p className="text-xs text-neutral-500">{t(lang, "settings_gpu_speedup")}</p>}
           </>
         )}
       </section>

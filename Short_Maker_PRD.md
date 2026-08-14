@@ -1686,6 +1686,15 @@ Potential future features:
 - multiple aspect ratios
 - cloud sync
 - mobile companion app
+- non-NVIDIA GPU acceleration for transcription (AMD ROCm, Intel oneAPI/OpenVINO,
+  Apple Metal, etc.) -- current GPU acceleration is CUDA/cuBLAS-only (NVIDIA
+  hardware only). AMD/Intel-only machines already fall back to CPU correctly
+  (S39's "CPU fallback" requirement), so this is a speed enhancement for a
+  wider range of hardware, not a correctness gap. Note if pursued: bundling
+  CUDA's cuBLAS DLLs alone added ~800MB to the standalone installer (S55/S56
+  packaging) purely for NVIDIA users; an equivalent multi-vendor bundle would
+  need a per-vendor optional download rather than one bundled installer for
+  everyone.
 
 These are NOT MVP requirements.
 

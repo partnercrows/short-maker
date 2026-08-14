@@ -15,6 +15,9 @@ from app.ai_providers.registry import ProviderConfig
 from app.core.clip_export import copy_clip_to_folder
 from app.core.config import get_settings
 from app.core.ffmpeg_utils import cut_subclip, extract_audio, probe_metadata
+from app.core.gpu_pack import download_gpu_pack
+from app.core.gpu_utils import ensure_cuda_dlls_on_path
+from app.core.system_capabilities import probe_capabilities
 from app.db.connection import get_connection
 from app.jobs.manager import job_manager
 from app.pipeline.ai_analysis.clip_selector import select_clips
@@ -223,3 +226,28 @@ def _burn_subtitles_for_clip(
     lines = group_into_lines(sliced)
     Path(srt_path).write_text(lines_to_srt(lines), encoding="utf-8")
     burn_subtitles(rendered_path, srt_path, final_path)
+
+
+def run_download_gpu_pack_job(job_id: str) -> None:
+    try:
+        job_manager.start(job_id)
+
+        def on_progress(fraction: float) -> None:
+            _raise_if_cancelled(job_id)
+            job_manager.update_progress(job_id, fraction * 100, "Downloading GPU pack")
+
+        download_gpu_pack(on_progress=on_progress)
+
+        # Make the freshly-downloaded DLLs usable immediately, in this same
+        # process, instead of requiring an app restart -- and drop the
+        # cached (previously "not ready") capability probe so the next
+        # /system/capabilities call re-checks for real.
+        ensure_cuda_dlls_on_path()
+        probe_capabilities.cache_clear()
+
+        job_manager.update_progress(job_id, 100, "Done")
+        job_manager.complete(job_id)
+    except JobCancelled:
+        return
+    except Exception as exc:  # noqa: BLE001 -- reported through the job row
+        job_manager.fail(job_id, str(exc))

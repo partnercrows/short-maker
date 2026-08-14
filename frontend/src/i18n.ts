@@ -86,6 +86,18 @@ const dict = {
     id: "Diukur di perangkat ini: ~2.6x lebih cepat (video 5 menit: 86s -> 33s pada model \"base\"). Hasil nyata bisa berbeda tergantung GPU.",
     en: 'Measured on this device: ~2.6x faster (5-min video: 86s -> 33s on the "base" model). Real results vary by GPU.',
   },
+  settings_gpu_pack_not_installed: {
+    id: "GPU NVIDIA terdeteksi, tapi paket akselerasi CUDA (~787MB) belum terpasang.",
+    en: "NVIDIA GPU detected, but the CUDA acceleration pack (~787MB) isn't installed yet.",
+  },
+  settings_gpu_pack_first_use_note: {
+    id: "Pemakaian pertama setelah download bisa terasa lambat sebentar (Windows memindai file besar ini sekali) -- pemakaian berikutnya akan cepat seperti biasa.",
+    en: "The first use after downloading may feel slow for a bit (Windows scans this large file once) -- every use after that is fast as normal.",
+  },
+  settings_gpu_pack_download: { id: "Download & Aktifkan GPU", en: "Download & Enable GPU" },
+  settings_gpu_pack_downloading: { id: "Mengunduh paket CUDA...", en: "Downloading CUDA pack..." },
+  settings_gpu_pack_failed: { id: "Download paket GPU gagal", en: "GPU pack download failed" },
+  notif_gpu_pack_done_title: { id: "Paket GPU terpasang", en: "GPU pack installed" },
 
   cancel: { id: "Batalkan", en: "Cancel" },
   eta_remaining: { id: "estimasi sisa", en: "estimated remaining" },

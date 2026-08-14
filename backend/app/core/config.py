@@ -31,6 +31,7 @@ class Settings:
         self.logs_dir = self.data_dir / "logs"
         self.db_path = self.data_dir / "short_maker.db"
         self.api_token_path = self.data_dir / ".api_token"
+        self.gpu_pack_dir = self.data_dir / "gpu-pack"
 
     def ensure_dirs(self) -> None:
         for path in (self.data_dir, self.projects_dir, self.temp_dir, self.logs_dir):

@@ -151,6 +151,18 @@ export function getCapabilities(): Promise<SystemCapabilities> {
   return request("/system/capabilities");
 }
 
+export interface GpuPackStatus {
+  installed: boolean;
+}
+
+export function getGpuPackStatus(): Promise<GpuPackStatus> {
+  return request("/system/gpu-pack");
+}
+
+export function downloadGpuPack(): Promise<Job> {
+  return request("/system/gpu-pack/download", { method: "POST" });
+}
+
 export function listClips(projectId: string): Promise<Clip[]> {
   return request(`/clips?project_id=${projectId}`);
 }
