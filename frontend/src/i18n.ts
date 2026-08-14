@@ -158,6 +158,30 @@ const dict = {
   job_status_failed: { id: "gagal", en: "failed" },
   job_status_cancelled: { id: "dibatalkan", en: "cancelled" },
 
+  edit_subtitle: { id: "Edit Subtitle", en: "Edit Subtitle" },
+  subtitle_studio: { id: "Subtitle Studio", en: "Subtitle Studio" },
+  subtitle_needs_rebuild: {
+    id: "Klip ini dibuat sebelum Subtitle Studio ada -- perlu disiapkan ulang sekali sebelum bisa diedit (video hasil generate tidak berubah).",
+    en: "This clip was generated before Subtitle Studio existed -- it needs a one-time rebuild before editing (the generated video itself won't change).",
+  },
+  subtitle_render_now: { id: "Siapkan Sekarang", en: "Prepare Now" },
+  subtitle_rendering: { id: "Memproses...", en: "Processing..." },
+  subtitle_render: { id: "Render", en: "Render" },
+  subtitle_render_done: { id: "Video berhasil di-render dengan subtitle terbaru.", en: "Video re-rendered with the latest subtitles." },
+  subtitle_preview_approximate: {
+    id: "Preview ini perkiraan -- hasil render sungguhan bisa sedikit berbeda.",
+    en: "This preview is approximate -- the real render may look slightly different.",
+  },
+  subtitle_no_lines: { id: "Belum ada baris subtitle.", en: "No subtitle lines yet." },
+  subtitle_split: { id: "Pisah", en: "Split" },
+  subtitle_merge_next: { id: "Gabung ↓", en: "Merge ↓" },
+  subtitle_delete: { id: "Hapus", en: "Delete" },
+  subtitle_add_line: { id: "+ Tambah Baris", en: "+ Add Line" },
+  subtitle_save: { id: "Simpan", en: "Save" },
+  subtitle_saving: { id: "Menyimpan...", en: "Saving..." },
+  subtitle_saved: { id: "Tersimpan!", en: "Saved!" },
+  subtitle_new_line_placeholder: { id: "Subtitle baru", en: "New subtitle" },
+
   footer_copyright: { id: "Hak Cipta", en: "Copyright" },
 } as const;
 

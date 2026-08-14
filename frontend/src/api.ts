@@ -231,3 +231,117 @@ export async function pollJob(jobId: string, onUpdate: (job: Job) => void): Prom
     await new Promise((r) => setTimeout(r, 2000));
   }
 }
+
+// Subtitle Studio -- field names intentionally mirror the backend's
+// Pydantic models verbatim (snake_case), same convention as ProviderConfig
+// above, since these are serialized straight to/from the API with no
+// client-side renaming layer.
+
+export interface SubtitleWordStyleOverride {
+  color: string | null;
+  weight: number | null;
+  background_color: string | null;
+  glow: boolean | null;
+}
+
+export interface SubtitleWord {
+  text: string;
+  start: number;
+  end: number;
+  style: SubtitleWordStyleOverride | null;
+}
+
+export interface SubtitlePosition {
+  x: number;
+  y: number;
+}
+
+export interface SubtitleBackground {
+  enabled: boolean;
+  color: string;
+  opacity: number;
+  border_radius: number;
+  padding: number;
+}
+
+export interface SubtitleStroke {
+  enabled: boolean;
+  color: string;
+  width: number;
+}
+
+export interface SubtitleShadow {
+  enabled: boolean;
+  color: string;
+  opacity: number;
+  blur: number;
+  offset_x: number;
+  offset_y: number;
+}
+
+export interface SubtitleGlow {
+  enabled: boolean;
+  color: string;
+  opacity: number;
+  blur: number;
+  spread: number;
+}
+
+export interface SubtitleStyle {
+  preset: string | null;
+  font_family: string;
+  font_size: number;
+  font_weight: number;
+  text_color: string;
+  position: SubtitlePosition;
+  alignment: "left" | "center" | "right";
+  background: SubtitleBackground;
+  stroke: SubtitleStroke;
+  shadow: SubtitleShadow;
+  glow: SubtitleGlow;
+}
+
+export interface SubtitleDocumentLine {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+  words: SubtitleWord[] | null;
+  style: SubtitleStyle | null;
+}
+
+export interface SubtitleDocument {
+  version: number;
+  clip_id: string;
+  default_style: SubtitleStyle;
+  lines: SubtitleDocumentLine[];
+  updated_at: string;
+}
+
+export interface SubtitleDocumentResponse {
+  document: SubtitleDocument;
+  needs_rebuild: boolean;
+  rendered_video_path: string | null;
+}
+
+export function getSubtitleDocument(clipId: string): Promise<SubtitleDocumentResponse> {
+  return request(`/subtitles/${clipId}`);
+}
+
+export function saveSubtitleDocument(clipId: string, document: SubtitleDocument): Promise<SubtitleDocument> {
+  return request(`/subtitles/${clipId}/document`, { method: "PUT", body: JSON.stringify(document) });
+}
+
+export interface ApplyStyleRequest {
+  scope: "line" | "lines" | "clip";
+  line_ids?: string[];
+  style: SubtitleStyle;
+}
+
+export function applySubtitleStyle(clipId: string, req: ApplyStyleRequest): Promise<SubtitleDocument> {
+  return request(`/subtitles/${clipId}/style`, { method: "POST", body: JSON.stringify(req) });
+}
+
+export function renderSubtitleJob(clipId: string): Promise<Job> {
+  return request(`/subtitles/${clipId}/render`, { method: "POST" });
+}

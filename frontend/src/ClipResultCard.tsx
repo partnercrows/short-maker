@@ -4,6 +4,7 @@ import { useState } from "react";
 import { copyClipTo, type Clip, type Job } from "./api";
 import { t, type Language } from "./i18n";
 import SocialKitPanel from "./SocialKitPanel";
+import SubtitleStudio from "./SubtitleStudio";
 import type { AppSettings } from "./settings";
 
 function parseAnalysis(clip: Clip) {
@@ -35,6 +36,7 @@ export default function ClipResultCard({ lang, clip, genJob, provider, onGenerat
   const analysis = parseAnalysis(clip);
   const [showPreview, setShowPreview] = useState(false);
   const [showSocialKit, setShowSocialKit] = useState(false);
+  const [showSubtitleStudio, setShowSubtitleStudio] = useState(false);
   const [includeSubtitle, setIncludeSubtitle] = useState(true);
   const [downloadStatus, setDownloadStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -114,6 +116,13 @@ export default function ClipResultCard({ lang, clip, genJob, provider, onGenerat
                   ? t(lang, "download_done")
                   : t(lang, "download")}
             </button>
+            <button
+              type="button"
+              className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              onClick={() => setShowSubtitleStudio((s) => !s)}
+            >
+              {showSubtitleStudio ? t(lang, "close") : t(lang, "edit_subtitle")}
+            </button>
           </>
         )}
 
@@ -139,6 +148,8 @@ export default function ClipResultCard({ lang, clip, genJob, provider, onGenerat
       )}
 
       {showSocialKit && <SocialKitPanel lang={lang} clipId={clip.id} provider={provider} onClose={() => setShowSocialKit(false)} />}
+
+      {showSubtitleStudio && <SubtitleStudio lang={lang} clipId={clip.id} onClose={() => setShowSubtitleStudio(false)} />}
     </div>
   );
 }

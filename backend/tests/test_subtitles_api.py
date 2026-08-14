@@ -49,6 +49,7 @@ def test_get_subtitle_document_lazily_creates_and_reports_needs_rebuild():
     response = get_subtitle_document("clip-1")
 
     assert response.needs_rebuild is True  # no rendered.mp4 exists
+    assert response.rendered_video_path is None
     assert len(response.document.lines) > 0
     assert response.document.default_style.preset is not None
 
@@ -69,6 +70,7 @@ def test_get_subtitle_document_needs_rebuild_false_when_rendered_exists():
 
     response = get_subtitle_document("clip-2")
     assert response.needs_rebuild is False
+    assert response.rendered_video_path == str(rendered_path)
 
 
 def test_get_subtitle_document_404_for_missing_clip():

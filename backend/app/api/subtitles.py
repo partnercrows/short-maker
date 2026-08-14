@@ -21,6 +21,7 @@ router = APIRouter(prefix="/subtitles", tags=["subtitles"], dependencies=[Depend
 class SubtitleDocumentResponse(BaseModel):
     document: SubtitleDocument
     needs_rebuild: bool
+    rendered_video_path: str | None = None  # the subtitle-free master, for live-preview overlay
 
 
 class ApplyStyleRequest(BaseModel):
@@ -67,8 +68,11 @@ def get_subtitle_document(clip_id: str) -> SubtitleDocumentResponse:
             )
             conn.commit()
 
-    needs_rebuild = not settings.clip_rendered_path(clip["project_id"], clip_id).is_file()
-    return SubtitleDocumentResponse(document=document, needs_rebuild=needs_rebuild)
+    rendered_path = settings.clip_rendered_path(clip["project_id"], clip_id)
+    needs_rebuild = not rendered_path.is_file()
+    return SubtitleDocumentResponse(
+        document=document, needs_rebuild=needs_rebuild, rendered_video_path=None if needs_rebuild else str(rendered_path)
+    )
 
 
 @router.put("/{clip_id}/document", response_model=SubtitleDocument)
