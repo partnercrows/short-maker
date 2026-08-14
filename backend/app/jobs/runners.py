@@ -7,6 +7,7 @@ queued->running->completed/failed lifecycle every job uses.
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,8 +25,10 @@ from app.pipeline.ai_analysis.clip_selector import select_clips
 from app.pipeline.reframe.models import ReframeMode
 from app.pipeline.reframe.modes import resolve as resolve_reframe
 from app.pipeline.render import render as render_clip
-from app.pipeline.subtitle import burn_subtitles, group_into_lines, lines_to_srt, slice_words
-from app.pipeline.transcribe import TranscriptResult, Word, get_transcriber
+from app.pipeline.subtitle import build_initial_document, burn_ass_subtitles, load_clip_words
+from app.pipeline.subtitle.ass_render import render_ass
+from app.pipeline.subtitle.models import load_document, save_document
+from app.pipeline.transcribe import TranscriptResult, get_transcriber
 
 TARGET_WIDTH = 720
 TARGET_HEIGHT = 1280
@@ -150,7 +153,7 @@ def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool, output_f
         clip_dir = settings.clip_dir(clip["project_id"], clip_id)
         clip_dir.mkdir(parents=True, exist_ok=True)
         subclip_path = clip_dir / "source_segment.mp4"
-        rendered_path = clip_dir / "rendered.mp4"
+        rendered_path = settings.clip_rendered_path(clip["project_id"], clip_id)
         final_path = clip_dir / "video.mp4"
 
         job_manager.update_progress(job_id, 15, "Cutting segment")
@@ -170,26 +173,35 @@ def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool, output_f
         _raise_if_cancelled(job_id)
 
         job_manager.update_progress(job_id, 55, "Rendering")
+        # `rendered_path` (the crop+audio master, no subtitles) is kept
+        # permanently from here on -- Subtitle Studio re-derives video.mp4
+        # from it any time the subtitle document changes, without ever
+        # re-cropping or re-transcribing.
         render_clip(str(subclip_path), plan, str(rendered_path), TARGET_WIDTH, TARGET_HEIGHT)
         _raise_if_cancelled(job_id)
 
         subtitle_path: str | None = None
+        subtitle_json_path: str | None = None
         if include_subtitle:
             job_manager.update_progress(job_id, 80, "Burning subtitles")
-            subtitle_path = str(clip_dir / "subtitle.srt")
-            _burn_subtitles_for_clip(clip["project_id"], clip["start_time"], clip["end_time"], str(rendered_path), subtitle_path, str(final_path))
+            subtitle_json_path = str(settings.clip_subtitle_json_path(clip["project_id"], clip_id))
+            subtitle_path = str(clip_dir / "subtitle.ass")
+            _burn_default_subtitles_for_clip(
+                clip_id, clip["project_id"], clip["start_time"], clip["end_time"], str(rendered_path), subtitle_json_path, subtitle_path, str(final_path)
+            )
         else:
-            rendered_path.replace(final_path)
+            shutil.copyfile(rendered_path, final_path)
 
         subclip_path.unlink(missing_ok=True)
-        if final_path != rendered_path:
-            rendered_path.unlink(missing_ok=True)
 
         now = _now()
         with get_connection() as conn:
             conn.execute(
-                "UPDATE clips SET video_path = ?, subtitle_path = ?, status = 'completed', updated_at = ? WHERE id = ?",
-                (str(final_path), subtitle_path, now, clip_id),
+                """
+                UPDATE clips SET video_path = ?, subtitle_path = ?, subtitle_json_path = ?,
+                    status = 'completed', updated_at = ? WHERE id = ?
+                """,
+                (str(final_path), subtitle_path, subtitle_json_path, now, clip_id),
             )
             conn.commit()
 
@@ -214,18 +226,103 @@ def _copy_to_output_folder(clip, final_path: Path, subtitle_path: str | None, ou
     copy_clip_to_folder(clip, final_path, subtitle_path, output_folder)
 
 
-def _burn_subtitles_for_clip(
-    project_id: str, clip_start: float, clip_end: float, rendered_path: str, srt_path: str, final_path: str
+def _burn_default_subtitles_for_clip(
+    clip_id: str,
+    project_id: str,
+    clip_start: float,
+    clip_end: float,
+    rendered_path: str,
+    subtitle_json_path: str,
+    ass_path: str,
+    final_path: str,
 ) -> None:
+    """Seeds a default-styled `SubtitleDocument` from the project transcript
+    and burns it -- the "Include subtitles" checkbox's path. The saved
+    `subtitle.json` is the same document Subtitle Studio opens afterwards,
+    so a subsequent edit re-renders from here rather than starting over."""
     settings = get_settings()
     transcript_path = settings.project_analysis_dir(project_id) / "transcript.json"
-    transcript_data = json.loads(transcript_path.read_text(encoding="utf-8"))
-    words = [Word(**w) for w in transcript_data["words"]]
+    words = load_clip_words(transcript_path, clip_start, clip_end)
+    document = build_initial_document(clip_id, words)
+    save_document(subtitle_json_path, document)
+    Path(ass_path).write_text(render_ass(document), encoding="utf-8")
+    burn_ass_subtitles(rendered_path, ass_path, final_path)
 
-    sliced = slice_words(words, clip_start, clip_end)
-    lines = group_into_lines(sliced)
-    Path(srt_path).write_text(lines_to_srt(lines), encoding="utf-8")
-    burn_subtitles(rendered_path, srt_path, final_path)
+
+def run_render_subtitle_job(job_id: str, clip_id: str) -> None:
+    """The real Subtitle Studio "Render" action: re-derives `video.mp4` from
+    the permanent `rendered.mp4` master + the clip's current
+    `SubtitleDocument` -- no re-crop, no re-transcribe. Also the recovery
+    path for a legacy clip whose `rendered.mp4` doesn't exist yet (it burned
+    straight to `video.mp4` before this feature existed): one-time rebuilds
+    the master from the original source video first.
+    """
+    settings = get_settings()
+    try:
+        job_manager.start(job_id)
+        with get_connection() as conn:
+            clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+            if clip is None:
+                raise ValueError(f"Clip not found: {clip_id}")
+            project = conn.execute("SELECT * FROM projects WHERE id = ?", (clip["project_id"],)).fetchone()
+
+        clip_dir = settings.clip_dir(clip["project_id"], clip_id)
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        rendered_path = settings.clip_rendered_path(clip["project_id"], clip_id)
+        final_path = clip_dir / "video.mp4"
+
+        if not rendered_path.exists():
+            job_manager.update_progress(job_id, 5, "Rebuilding clip (one-time, no video previously saved)")
+            subclip_path = clip_dir / "source_segment.mp4"
+            cut_subclip(project["source_video_path"], clip["start_time"], clip["duration"], str(subclip_path))
+            _raise_if_cancelled(job_id)
+            metadata = probe_metadata(str(subclip_path))
+            plan = resolve_reframe(
+                video_path=str(subclip_path),
+                requested_mode=ReframeMode.AUTO,
+                source_width=metadata.width,
+                source_height=metadata.height,
+                target_width=TARGET_WIDTH,
+                target_height=TARGET_HEIGHT,
+            )
+            _raise_if_cancelled(job_id)
+            render_clip(str(subclip_path), plan, str(rendered_path), TARGET_WIDTH, TARGET_HEIGHT)
+            subclip_path.unlink(missing_ok=True)
+        _raise_if_cancelled(job_id)
+
+        job_manager.update_progress(job_id, 50, "Loading subtitle document")
+        subtitle_json_path = settings.clip_subtitle_json_path(clip["project_id"], clip_id)
+        if subtitle_json_path.is_file():
+            document = load_document(subtitle_json_path)
+        else:
+            transcript_path = settings.project_analysis_dir(clip["project_id"]) / "transcript.json"
+            words = load_clip_words(transcript_path, clip["start_time"], clip["end_time"])
+            document = build_initial_document(clip_id, words)
+            save_document(subtitle_json_path, document)
+        _raise_if_cancelled(job_id)
+
+        job_manager.update_progress(job_id, 70, "Rendering subtitles")
+        ass_path = clip_dir / "subtitle.ass"
+        ass_path.write_text(render_ass(document), encoding="utf-8")
+        burn_ass_subtitles(str(rendered_path), str(ass_path), str(final_path))
+
+        now = _now()
+        with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE clips SET video_path = ?, subtitle_path = ?, subtitle_json_path = ?,
+                    status = 'completed', updated_at = ? WHERE id = ?
+                """,
+                (str(final_path), str(ass_path), str(subtitle_json_path), now, clip_id),
+            )
+            conn.commit()
+
+        job_manager.update_progress(job_id, 100, "Done")
+        job_manager.complete(job_id)
+    except JobCancelled:
+        return
+    except Exception as exc:  # noqa: BLE001 -- reported through the job row
+        job_manager.fail(job_id, str(exc))
 
 
 def run_download_gpu_pack_job(job_id: str) -> None:

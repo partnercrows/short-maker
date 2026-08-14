@@ -45,6 +45,8 @@ class Clip(BaseModel):
     transcript_json: str | None
     video_path: str | None
     subtitle_path: str | None
+    subtitle_json_path: str | None = None
+    intro_json_path: str | None = None
     status: str
     created_at: str
     updated_at: str

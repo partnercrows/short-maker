@@ -49,6 +49,20 @@ class Settings:
     def clip_dir(self, project_id: str, clip_id: str) -> Path:
         return self.project_dir(project_id) / "clips" / clip_id
 
+    def clip_rendered_path(self, project_id: str, clip_id: str) -> Path:
+        """The crop+audio master, pre-subtitle-burn -- kept permanently so
+        subtitle edits (and intro-frame capture) never need a re-crop."""
+        return self.clip_dir(project_id, clip_id) / "rendered.mp4"
+
+    def clip_subtitle_json_path(self, project_id: str, clip_id: str) -> Path:
+        return self.clip_dir(project_id, clip_id) / "subtitle.json"
+
+    def clip_intro_json_path(self, project_id: str, clip_id: str) -> Path:
+        return self.clip_dir(project_id, clip_id) / "intro.json"
+
+    def clip_intro_image_path(self, project_id: str, clip_id: str) -> Path:
+        return self.clip_dir(project_id, clip_id) / "intro.png"
+
 
 @lru_cache
 def get_settings() -> Settings:

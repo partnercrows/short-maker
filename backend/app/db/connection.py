@@ -5,13 +5,19 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from app.core.config import get_settings
-from app.db.schema import SCHEMA_STATEMENTS
+from app.db.schema import MIGRATIONS, SCHEMA_STATEMENTS
 
 
 def init_db() -> None:
     with get_connection() as conn:
         for statement in SCHEMA_STATEMENTS:
             conn.execute(statement)
+        for statement in MIGRATIONS:
+            try:
+                conn.execute(statement)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc):
+                    raise
         conn.commit()
 
 

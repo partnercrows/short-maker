@@ -36,6 +36,8 @@ SCHEMA_STATEMENTS = [
         transcript_json TEXT,
         video_path TEXT,
         subtitle_path TEXT,
+        subtitle_json_path TEXT,
+        intro_json_path TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -91,4 +93,14 @@ SCHEMA_STATEMENTS = [
         finished_at TEXT
     )
     """,
+]
+
+# `CREATE TABLE IF NOT EXISTS` above is a no-op on a database that already
+# has the table -- new columns added to an existing table need an explicit
+# migration. Each statement here must be idempotent (safe to re-run against
+# a database that already has it applied); `init_db()` swallows the
+# "duplicate column" error each one raises the second time it runs.
+MIGRATIONS = [
+    "ALTER TABLE clips ADD COLUMN subtitle_json_path TEXT",
+    "ALTER TABLE clips ADD COLUMN intro_json_path TEXT",
 ]
