@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import {
+  applySubtitleStyle,
   getSubtitleDocument,
   pollJob,
   renderSubtitleJob,
@@ -11,6 +12,7 @@ import {
   type SubtitleStyle,
 } from "./api";
 import { t, type Language } from "./i18n";
+import SubtitleStyleEditor, { type StyleScope } from "./SubtitleStyleEditor";
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "./subtitlePresets";
 
 function formatTime(seconds: number): string {
@@ -109,6 +111,22 @@ function mergeLines(a: SubtitleDocumentLine, b: SubtitleDocumentLine): SubtitleD
   };
 }
 
+function applyStyleToDocumentLocally(
+  document: SubtitleDocument,
+  scope: StyleScope,
+  lineIds: string[],
+  style: SubtitleStyle,
+): SubtitleDocument {
+  if (scope === "clip") {
+    return { ...document, default_style: style };
+  }
+  const idSet = new Set(lineIds);
+  return {
+    ...document,
+    lines: document.lines.map((l) => (idSet.has(l.id) ? { ...l, style } : l)),
+  };
+}
+
 interface Props {
   lang: Language;
   clipId: string;
@@ -128,6 +146,11 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
   const [renderError, setRenderError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [scale, setScale] = useState(0);
+  const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+  const [showStyleEditor, setShowStyleEditor] = useState(false);
+  const [styleScope, setStyleScope] = useState<StyleScope>("clip");
+  const [draftStyle, setDraftStyle] = useState<SubtitleStyle | null>(null);
+  const [applying, setApplying] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -220,6 +243,48 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
     if (videoRef.current) videoRef.current.currentTime = line.start;
   }
 
+  function toggleLineSelected(id: string) {
+    setSelectedLineIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function openStyleEditor() {
+    if (!document) return;
+    const base = document.lines.find((l) => currentTime >= l.start && currentTime < l.end) ?? null;
+    setStyleScope(base ? "line" : "clip");
+    setDraftStyle(base?.style ?? document.default_style);
+    setShowStyleEditor(true);
+  }
+
+  function closeStyleEditor() {
+    setShowStyleEditor(false);
+    setDraftStyle(null);
+  }
+
+  async function handleApplyStyle() {
+    if (!document || !draftStyle) return;
+    const baseActiveLine = document.lines.find((l) => currentTime >= l.start && currentTime < l.end) ?? null;
+    const lineIds =
+      styleScope === "line" ? (baseActiveLine ? [baseActiveLine.id] : []) : styleScope === "lines" ? Array.from(selectedLineIds) : undefined;
+    if ((styleScope === "line" || styleScope === "lines") && (!lineIds || lineIds.length === 0)) return;
+    setApplying(true);
+    setError(null);
+    try {
+      const updated = await applySubtitleStyle(clipId, { scope: styleScope, line_ids: lineIds, style: draftStyle });
+      setDocument(updated);
+      setDirty(false);
+      closeStyleEditor();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setApplying(false);
+    }
+  }
+
   async function handleSave() {
     if (!document) return;
     setSaving(true);
@@ -255,8 +320,18 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
     }
   }
 
-  const activeLine = document?.lines.find((l) => currentTime >= l.start && currentTime < l.end) ?? null;
-  const activeStyle = activeLine ? activeLine.style ?? document?.default_style ?? null : null;
+  const baseActiveLine = document?.lines.find((l) => currentTime >= l.start && currentTime < l.end) ?? null;
+  const previewDocument =
+    showStyleEditor && draftStyle && document
+      ? applyStyleToDocumentLocally(
+          document,
+          styleScope,
+          styleScope === "line" ? (baseActiveLine ? [baseActiveLine.id] : []) : Array.from(selectedLineIds),
+          draftStyle,
+        )
+      : document;
+  const activeLine = previewDocument?.lines.find((l) => l.id === baseActiveLine?.id) ?? baseActiveLine;
+  const activeStyle = activeLine ? activeLine.style ?? previewDocument?.default_style ?? null : null;
   const rendering = renderJob?.status === "queued" || renderJob?.status === "running";
 
   return (
@@ -310,6 +385,12 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
             {document.lines.map((line, index) => (
               <div key={line.id} className="rounded border border-neutral-200 p-2 text-sm dark:border-neutral-800">
                 <div className="mb-1 flex items-center gap-2 text-xs text-neutral-500">
+                  <input
+                    type="checkbox"
+                    checked={selectedLineIds.has(line.id)}
+                    onChange={() => toggleLineSelected(line.id)}
+                    title={t(lang, "style_scope_selected_lines")}
+                  />
                   <button type="button" className="text-purple-600 hover:underline dark:text-purple-400" onClick={() => handleJumpTo(line)}>
                     {formatTime(line.start)}
                   </button>
@@ -362,6 +443,17 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
             </button>
             <button
               type="button"
+              className={`rounded border px-3 py-1.5 text-sm ${
+                showStyleEditor
+                  ? "border-purple-600 bg-purple-600 text-white"
+                  : "border-neutral-300 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              }`}
+              onClick={() => (showStyleEditor ? closeStyleEditor() : openStyleEditor())}
+            >
+              {t(lang, "subtitle_style_button")}
+            </button>
+            <button
+              type="button"
               className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
               onClick={handleSave}
               disabled={!dirty || saving}
@@ -389,6 +481,21 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
             <p className="mt-1 text-xs text-green-600 dark:text-green-400">{t(lang, "subtitle_render_done")}</p>
           )}
           {renderError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{renderError}</p>}
+
+          {showStyleEditor && draftStyle && (
+            <SubtitleStyleEditor
+              lang={lang}
+              style={draftStyle}
+              scope={styleScope}
+              selectedCount={selectedLineIds.size}
+              hasActiveLine={!!baseActiveLine}
+              onScopeChange={setStyleScope}
+              onChange={setDraftStyle}
+              onApply={handleApplyStyle}
+              onCancel={closeStyleEditor}
+              applying={applying}
+            />
+          )}
         </>
       )}
     </div>
