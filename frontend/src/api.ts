@@ -391,3 +391,16 @@ export function applySubtitleStyle(clipId: string, req: ApplyStyleRequest): Prom
 export function renderSubtitleJob(clipId: string): Promise<Job> {
   return request(`/subtitles/${clipId}/render`, { method: "POST" });
 }
+
+export interface SubtitleCorrection {
+  id: string;
+  corrected_text: string;
+}
+
+export interface CorrectSubtitlesResponse {
+  corrections: SubtitleCorrection[];
+}
+
+export function correctSubtitles(clipId: string, provider: ProviderConfig): Promise<CorrectSubtitlesResponse> {
+  return request(`/subtitles/${clipId}/correct`, { method: "POST", body: JSON.stringify({ provider }) }, 120_000);
+}

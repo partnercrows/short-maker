@@ -182,6 +182,14 @@ const dict = {
   subtitle_saved: { id: "Tersimpan!", en: "Saved!" },
   subtitle_new_line_placeholder: { id: "Subtitle baru", en: "New subtitle" },
   subtitle_style_button: { id: "🎨 Gaya", en: "🎨 Style" },
+  subtitle_correct_ai: { id: "🩹 Koreksi AI", en: "🩹 AI Correct" },
+  subtitle_correcting: { id: "Mengoreksi...", en: "Correcting..." },
+  subtitle_correction_review_title: { id: "Tinjau Hasil Koreksi AI", en: "Review AI Corrections" },
+  subtitle_correction_none_found: {
+    id: "Tidak ada kesalahan ejaan/tata bahasa yang ditemukan.",
+    en: "No spelling/grammar mistakes found.",
+  },
+  subtitle_correction_apply: { id: "Terapkan Koreksi Terpilih", en: "Apply Selected Corrections" },
 
   style_presets: { id: "Preset Gaya", en: "Style Presets" },
   style_apply_to: { id: "Terapkan ke", en: "Apply to" },

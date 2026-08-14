@@ -2,6 +2,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import {
   applySubtitleStyle,
+  correctSubtitles,
   getSubtitleDocument,
   pollJob,
   renderSubtitleJob,
@@ -12,8 +13,16 @@ import {
   type SubtitleStyle,
 } from "./api";
 import { t, type Language } from "./i18n";
+import type { AppSettings } from "./settings";
 import SubtitleStyleEditor, { type StyleScope } from "./SubtitleStyleEditor";
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "./subtitlePresets";
+
+interface CorrectionReviewItem {
+  id: string;
+  original: string;
+  corrected: string;
+  accept: boolean;
+}
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -143,10 +152,11 @@ function applyStyleToDocumentLocally(
 interface Props {
   lang: Language;
   clipId: string;
+  provider: AppSettings["provider"];
   onClose: () => void;
 }
 
-export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
+export default function SubtitleStudio({ lang, clipId, provider, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [document, setDocument] = useState<SubtitleDocument | null>(null);
@@ -164,6 +174,9 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
   const [styleScope, setStyleScope] = useState<StyleScope>("clip");
   const [draftStyle, setDraftStyle] = useState<SubtitleStyle | null>(null);
   const [applying, setApplying] = useState(false);
+  const [correcting, setCorrecting] = useState(false);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
+  const [correctionReview, setCorrectionReview] = useState<CorrectionReviewItem[] | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -316,6 +329,44 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleCorrectSubtitles() {
+    if (!document) return;
+    setCorrecting(true);
+    setCorrectionError(null);
+    setCorrectionReview(null);
+    try {
+      const providerConfig = {
+        provider_type: provider.providerType,
+        model: provider.model,
+        api_key: provider.apiKey,
+        base_url: provider.baseUrl || undefined,
+      };
+      const res = await correctSubtitles(clipId, providerConfig);
+      const originalById = new Map(document.lines.map((l) => [l.id, l.text]));
+      const changed = res.corrections
+        .filter((c) => originalById.has(c.id) && c.corrected_text.trim() !== (originalById.get(c.id) ?? "").trim())
+        .map((c) => ({ id: c.id, original: originalById.get(c.id)!, corrected: c.corrected_text, accept: true }));
+      setCorrectionReview(changed);
+    } catch (e) {
+      setCorrectionError(String(e));
+    } finally {
+      setCorrecting(false);
+    }
+  }
+
+  function toggleAcceptCorrection(id: string) {
+    setCorrectionReview((prev) => (prev ? prev.map((c) => (c.id === id ? { ...c, accept: !c.accept } : c)) : prev));
+  }
+
+  function handleApplyCorrections() {
+    if (!document || !correctionReview) return;
+    const accepted = new Map(correctionReview.filter((c) => c.accept).map((c) => [c.id, c.corrected]));
+    if (accepted.size > 0) {
+      updateLines(document.lines.map((l) => (accepted.has(l.id) ? { ...l, text: accepted.get(l.id)!, words: null } : l)));
+    }
+    setCorrectionReview(null);
   }
 
   async function handleRender() {
@@ -488,6 +539,14 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
             <button
               type="button"
               className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              onClick={handleCorrectSubtitles}
+              disabled={correcting || document.lines.length === 0}
+            >
+              {correcting ? t(lang, "subtitle_correcting") : t(lang, "subtitle_correct_ai")}
+            </button>
+            <button
+              type="button"
+              className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
               onClick={handleSave}
               disabled={!dirty || saving}
             >
@@ -514,6 +573,49 @@ export default function SubtitleStudio({ lang, clipId, onClose }: Props) {
             <p className="mt-1 text-xs text-green-600 dark:text-green-400">{t(lang, "subtitle_render_done")}</p>
           )}
           {renderError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{renderError}</p>}
+          {correctionError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{correctionError}</p>}
+
+          {correctionReview && (
+            <div className="mt-3 rounded border border-neutral-200 p-3 dark:border-neutral-800">
+              <div className="mb-2 text-sm font-medium">{t(lang, "subtitle_correction_review_title")}</div>
+              {correctionReview.length === 0 ? (
+                <p className="text-sm text-neutral-500">{t(lang, "subtitle_correction_none_found")}</p>
+              ) : (
+                <div className="max-h-64 space-y-2 overflow-y-auto">
+                  {correctionReview.map((c) => (
+                    <label
+                      key={c.id}
+                      className="flex items-start gap-2 rounded border border-neutral-200 p-2 text-sm dark:border-neutral-800"
+                    >
+                      <input type="checkbox" className="mt-1" checked={c.accept} onChange={() => toggleAcceptCorrection(c.id)} />
+                      <div className="flex-1">
+                        <div className="text-neutral-400 line-through">{c.original}</div>
+                        <div className="text-green-700 dark:text-green-400">{c.corrected}</div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <div className="mt-2 flex gap-2">
+                {correctionReview.length > 0 && (
+                  <button
+                    type="button"
+                    className="rounded bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-500"
+                    onClick={handleApplyCorrections}
+                  >
+                    {t(lang, "subtitle_correction_apply")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                  onClick={() => setCorrectionReview(null)}
+                >
+                  {t(lang, "cancel")}
+                </button>
+              </div>
+            </div>
+          )}
 
           {showStyleEditor && draftStyle && (
             <SubtitleStyleEditor

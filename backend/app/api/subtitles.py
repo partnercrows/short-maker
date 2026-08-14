@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.ai_providers.registry import ProviderConfig
 from app.core.config import get_settings
 from app.core.security import require_local_token
 from app.db.connection import get_connection
@@ -13,6 +14,7 @@ from app.jobs.manager import job_manager
 from app.jobs.models import Job, JobType
 from app.jobs.runners import run_render_subtitle_job
 from app.pipeline.subtitle import build_initial_document, load_clip_words
+from app.pipeline.subtitle.correction import SubtitleCorrection, correct_subtitle_lines
 from app.pipeline.subtitle.models import SubtitleDocument, SubtitleStyle, load_document, save_document
 
 router = APIRouter(prefix="/subtitles", tags=["subtitles"], dependencies=[Depends(require_local_token)])
@@ -148,6 +150,45 @@ def _apply_style_to_lines(document: SubtitleDocument, line_ids: list[str], style
     for line in document.lines:
         if line.id in ids:
             line.style = style
+
+
+class CorrectSubtitlesRequest(BaseModel):
+    provider: ProviderConfig
+    line_ids: list[str] | None = None  # None = every line in the document
+
+
+class CorrectSubtitlesResponse(BaseModel):
+    corrections: list[SubtitleCorrection]
+
+
+@router.post("/{clip_id}/correct", response_model=CorrectSubtitlesResponse)
+def correct_subtitles(clip_id: str, request: CorrectSubtitlesRequest) -> CorrectSubtitlesResponse:
+    """Preview-only: returns AI-suggested spelling/grammar fixes without
+    touching the persisted document. The frontend shows these for review and
+    applies accepted ones through the existing document PUT, same as any
+    other manual text edit."""
+    clip = _get_clip_or_404(clip_id)
+    settings = get_settings()
+    path = settings.clip_subtitle_json_path(clip["project_id"], clip_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No subtitle document yet -- fetch it first")
+    document = load_document(path)
+
+    lines = document.lines
+    if request.line_ids is not None:
+        wanted = set(request.line_ids)
+        missing = wanted - {line.id for line in lines}
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Unknown line id(s): {sorted(missing)}")
+        lines = [line for line in lines if line.id in wanted]
+    if not lines:
+        raise HTTPException(status_code=400, detail="No subtitle lines to correct")
+
+    try:
+        corrections = correct_subtitle_lines(request.provider, lines)
+    except Exception as exc:  # noqa: BLE001 -- surfaced to the user as a plain message
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CorrectSubtitlesResponse(corrections=corrections)
 
 
 @router.post("/{clip_id}/render", response_model=Job)

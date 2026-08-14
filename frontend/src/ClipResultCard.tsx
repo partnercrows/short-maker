@@ -188,7 +188,9 @@ export default function ClipResultCard({ lang, clip, genJob, provider, onGenerat
 
       {showSocialKit && <SocialKitPanel lang={lang} clipId={clip.id} provider={provider} onClose={() => setShowSocialKit(false)} />}
 
-      {showSubtitleStudio && <SubtitleStudio lang={lang} clipId={clip.id} onClose={() => setShowSubtitleStudio(false)} />}
+      {showSubtitleStudio && (
+        <SubtitleStudio lang={lang} clipId={clip.id} provider={provider} onClose={() => setShowSubtitleStudio(false)} />
+      )}
 
       {showIntroFrame && (
         <IntroFramePanel lang={lang} clipId={clip.id} videoPath={clip.video_path} onClose={() => setShowIntroFrame(false)} />

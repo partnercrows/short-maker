@@ -4,9 +4,12 @@ import json
 
 import pytest
 
+from app.ai_providers.registry import ProviderConfig, ProviderType
 from app.api.subtitles import (
     ApplyStyleRequest,
+    CorrectSubtitlesRequest,
     apply_subtitle_style,
+    correct_subtitles,
     get_subtitle_document,
     save_subtitle_document,
 )
@@ -14,6 +17,8 @@ from app.core.config import get_settings
 from app.db.connection import get_connection, init_db
 from app.pipeline.subtitle.models import PRESETS, SubtitleDocument, SubtitleDocumentLine, SubtitleStyle
 from fastapi import HTTPException
+
+_PROVIDER = ProviderConfig(provider_type=ProviderType.GEMINI, model="fake-model", api_key="fake")
 
 
 def _make_project_and_clip(project_id: str, clip_id: str, start: float, end: float) -> None:
@@ -162,3 +167,59 @@ def test_apply_style_unknown_line_id_404s():
     with pytest.raises(HTTPException) as exc_info:
         apply_subtitle_style("clip-8", ApplyStyleRequest(scope="lines", line_ids=["nope"], style=SubtitleStyle()))
     assert exc_info.value.status_code == 404
+
+
+def test_correct_subtitles_returns_suggestions_without_persisting(monkeypatch):
+    init_db()
+    _make_project_and_clip("proj-9", "clip-9", 0.0, 5.0)
+    _write_transcript("proj-9")
+    seeded = get_subtitle_document("clip-9").document
+    target_id = seeded.lines[0].id
+    original_text = seeded.lines[0].text
+
+    fake_response = json.dumps([{"id": target_id, "corrected_text": "Fixed text."}])
+    monkeypatch.setattr("app.pipeline.subtitle.correction.complete_chat", lambda *a, **k: fake_response)
+
+    result = correct_subtitles("clip-9", CorrectSubtitlesRequest(provider=_PROVIDER))
+
+    assert any(c.id == target_id and c.corrected_text == "Fixed text." for c in result.corrections)
+    # Preview-only: the persisted document is untouched.
+    reloaded = get_subtitle_document("clip-9").document
+    assert reloaded.lines[0].text == original_text
+
+
+def test_correct_subtitles_404_when_no_document_yet():
+    init_db()
+    _make_project_and_clip("proj-10", "clip-10", 0.0, 5.0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        correct_subtitles("clip-10", CorrectSubtitlesRequest(provider=_PROVIDER))
+    assert exc_info.value.status_code == 404
+
+
+def test_correct_subtitles_404_for_unknown_line_id():
+    init_db()
+    _make_project_and_clip("proj-11", "clip-11", 0.0, 5.0)
+    _write_transcript("proj-11")
+    get_subtitle_document("clip-11")
+
+    with pytest.raises(HTTPException) as exc_info:
+        correct_subtitles("clip-11", CorrectSubtitlesRequest(provider=_PROVIDER, line_ids=["nope"]))
+    assert exc_info.value.status_code == 404
+
+
+def test_correct_subtitles_surfaces_ai_errors_as_400(monkeypatch):
+    init_db()
+    _make_project_and_clip("proj-12", "clip-12", 0.0, 5.0)
+    _write_transcript("proj-12")
+    get_subtitle_document("clip-12")
+
+    def boom(*a, **k):
+        raise RuntimeError("provider is unreachable")
+
+    monkeypatch.setattr("app.pipeline.subtitle.correction.complete_chat", boom)
+
+    with pytest.raises(HTTPException) as exc_info:
+        correct_subtitles("clip-12", CorrectSubtitlesRequest(provider=_PROVIDER))
+    assert exc_info.value.status_code == 400
+    assert "provider is unreachable" in exc_info.value.detail
