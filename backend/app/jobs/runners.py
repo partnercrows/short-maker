@@ -19,6 +19,7 @@ from app.core.ffmpeg_utils import cut_subclip, extract_audio, probe_metadata
 from app.core.gpu_pack import download_gpu_pack
 from app.core.gpu_utils import ensure_cuda_dlls_on_path
 from app.core.system_capabilities import probe_capabilities
+from app.core.youtube_download import download_youtube_audio, download_youtube_video
 from app.db.connection import get_connection
 from app.jobs.manager import job_manager
 from app.pipeline.ai_analysis.clip_selector import select_clips
@@ -383,6 +384,33 @@ def run_download_gpu_pack_job(job_id: str) -> None:
         probe_capabilities.cache_clear()
 
         job_manager.update_progress(job_id, 100, "Done")
+        job_manager.complete(job_id)
+    except JobCancelled:
+        return
+    except Exception as exc:  # noqa: BLE001 -- reported through the job row
+        job_manager.fail(job_id, str(exc))
+
+
+def run_download_youtube_job(
+    job_id: str, url: str, media_format: str, resolution: int | None, output_folder: str
+) -> None:
+    try:
+        job_manager.start(job_id)
+
+        def on_progress(fraction: float, step: str) -> None:
+            _raise_if_cancelled(job_id)
+            job_manager.update_progress(job_id, fraction * 100, step)
+
+        if media_format == "audio":
+            final_path = download_youtube_audio(url, output_folder, on_progress=on_progress)
+        else:
+            assert resolution is not None  # enforced by the API layer before the job is created
+            final_path = download_youtube_video(url, resolution, output_folder, on_progress=on_progress)
+
+        # No DB row exists for this one-shot download -- stash the filename
+        # in current_step (left untouched by complete()) so the frontend has
+        # something to show beyond "100%, Done".
+        job_manager.update_progress(job_id, 100, f"Saved as {final_path.name}")
         job_manager.complete(job_id)
     except JobCancelled:
         return

@@ -3,6 +3,7 @@ import AiClipperView from "./AiClipperView";
 import HistoryView from "./HistoryView";
 import Sidebar, { type View } from "./Sidebar";
 import SettingsView from "./SettingsView";
+import YouTubeDownloadView from "./YouTubeDownloadView";
 import { loadSettings, saveSettings, type AppSettings } from "./settings";
 import type { Project } from "./api";
 
@@ -40,6 +41,7 @@ function App() {
           <AiClipperView settings={settings} onSettingsChange={handleSettingsChange} openProject={openProject} />
         </div>
         {view === "history" && <HistoryView language={settings.language} onOpenProject={handleOpenProject} />}
+        {view === "youtube_download" && <YouTubeDownloadView language={settings.language} />}
         {view === "settings" && <SettingsView settings={settings} onChange={handleSettingsChange} />}
       </main>
     </div>

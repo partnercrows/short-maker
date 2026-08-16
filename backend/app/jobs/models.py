@@ -20,6 +20,7 @@ class JobType(StrEnum):
     GENERATE_SOCIAL_KIT = "generate_social_kit"
     DOWNLOAD_GPU_PACK = "download_gpu_pack"
     EXPORT_CLIP = "export_clip"
+    DOWNLOAD_YOUTUBE_VIDEO = "download_youtube_video"
 
 
 class Job(BaseModel):

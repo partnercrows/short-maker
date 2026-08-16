@@ -17,6 +17,7 @@ $ErrorActionPreference = "Stop"
   --collect-all ctranslate2 `
   --collect-all tokenizers `
   --collect-all google.genai `
+  --collect-all yt_dlp `
   --exclude-module google.genai.tests `
   --exclude-module matplotlib `
   --exclude-module tkinter `
@@ -27,6 +28,7 @@ $ErrorActionPreference = "Stop"
   --hidden-import app.api.subtitles `
   --hidden-import app.api.social_kit `
   --hidden-import app.api.system `
+  --hidden-import app.api.youtube `
   run_server.py
 
 $triple = (rustc -vV | Select-String "^host:").ToString().Split(" ")[1]

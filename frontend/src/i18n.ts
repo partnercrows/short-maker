@@ -3,6 +3,7 @@ export type Language = "id" | "en";
 const dict = {
   nav_ai_clipper: { id: "AI Clipper", en: "AI Clipper" },
   nav_history: { id: "Riwayat", en: "History" },
+  nav_youtube_download: { id: "Unduh YouTube", en: "Download YouTube" },
   nav_settings: { id: "Pengaturan", en: "Settings" },
 
   step_project: { id: "Proyek", en: "Project" },
@@ -251,6 +252,24 @@ const dict = {
   intro_preview: { id: "▶ Preview", en: "▶ Preview" },
   intro_current_image: { id: "Gambar intro saat ini", en: "Current intro image" },
   intro_no_image_yet: { id: "Belum ada gambar intro.", en: "No intro image yet." },
+
+  youtube_download_title: { id: "Unduh Video YouTube", en: "Download YouTube Video" },
+  youtube_url_label: { id: "URL YouTube", en: "YouTube URL" },
+  youtube_url_placeholder: { id: "Tempel link video YouTube di sini...", en: "Paste a YouTube video link here..." },
+  youtube_check_video: { id: "Cek Video", en: "Check Video" },
+  youtube_checking: { id: "Memeriksa...", en: "Checking..." },
+  youtube_duration_label: { id: "Durasi", en: "Duration" },
+  youtube_format_label: { id: "Format Unduhan", en: "Download Format" },
+  youtube_format_video: { id: "🎬 Video", en: "🎬 Video" },
+  youtube_format_audio: { id: "🎵 MP3 (Audio)", en: "🎵 MP3 (Audio)" },
+  youtube_resolution_label: { id: "Pilih Resolusi", en: "Choose Resolution" },
+  youtube_no_resolutions: { id: "Tidak ada resolusi video yang terdeteksi.", en: "No video resolutions detected." },
+  youtube_destination_label: { id: "Folder Tujuan", en: "Destination Folder" },
+  youtube_choose_folder: { id: "Pilih Folder", en: "Choose Folder" },
+  youtube_no_folder_chosen: { id: "Belum ada folder dipilih", en: "No folder chosen yet" },
+  youtube_download_button: { id: "Unduh", en: "Download" },
+  youtube_downloading: { id: "Mengunduh...", en: "Downloading..." },
+  youtube_download_done: { id: "Unduhan selesai!", en: "Download complete!" },
 
   footer_copyright: { id: "Hak Cipta", en: "Copyright" },
 } as const;

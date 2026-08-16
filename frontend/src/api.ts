@@ -404,3 +404,32 @@ export interface CorrectSubtitlesResponse {
 export function correctSubtitles(clipId: string, provider: ProviderConfig): Promise<CorrectSubtitlesResponse> {
   return request(`/subtitles/${clipId}/correct`, { method: "POST", body: JSON.stringify({ provider }) }, 120_000);
 }
+
+// YouTube Download -- standalone utility, independent of the AI Clipper
+// project/clip pipeline. No history is persisted; this is a one-shot
+// paste-URL-and-download tool.
+
+export interface YoutubeVideoInfo {
+  title: string;
+  duration: number | null;
+  thumbnail_url: string | null;
+  available_resolutions: number[];
+}
+
+export function getYoutubeVideoInfo(url: string): Promise<YoutubeVideoInfo> {
+  return request(`/youtube/info`, { method: "POST", body: JSON.stringify({ url }) }, 30_000);
+}
+
+export type YoutubeDownloadFormat = "video" | "audio";
+
+export function downloadYoutubeMedia(
+  url: string,
+  format: YoutubeDownloadFormat,
+  resolution: number | null,
+  outputFolder: string,
+): Promise<Job> {
+  return request(`/youtube/download`, {
+    method: "POST",
+    body: JSON.stringify({ url, format, resolution: resolution ?? undefined, output_folder: outputFolder }),
+  });
+}
