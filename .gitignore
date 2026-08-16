@@ -54,3 +54,7 @@ backend/spike/**/*.wav
 .idea/
 .DS_Store
 Thumbs.db
+
+# Updater signing keys must never be committed -- keep them outside the repo
+*.key
+*.key.pub
