@@ -19,6 +19,15 @@ from pydantic import BaseModel
 
 from app.core.ffmpeg_utils import ffmpeg_path
 
+# YouTube occasionally throws up an anti-bot wall ("Sign in to confirm
+# you're not a bot") that blocks plain, unauthenticated requests -- yt-dlp's
+# own documented workaround is to read cookies from a browser the user is
+# already logged into YouTube in. Tried in this order since Chrome/Edge's
+# cookie DB is commonly locked while the browser is running (a known
+# yt-dlp/Windows limitation) and Firefox's isn't.
+_BOT_CHECK_SIGNATURE = "Sign in to confirm"
+_COOKIE_BROWSER_FALLBACKS = ["firefox", "chrome", "edge", "brave", "vivaldi", "opera"]
+
 
 class VideoInfo(BaseModel):
     title: str
@@ -27,12 +36,44 @@ class VideoInfo(BaseModel):
     available_resolutions: list[int]  # e.g. [1080, 720, 480, 360], descending
 
 
+def _run_ydl(ydl_opts: dict, url: str, download: bool) -> tuple[yt_dlp.YoutubeDL, dict]:
+    """Runs yt-dlp, transparently retrying with cookies read from a locally
+    installed browser if YouTube responds with its bot-check wall -- real
+    users already logged into YouTube in their own browser hit zero extra
+    steps; only a genuinely blocked/logged-out machine reaches the final
+    error below."""
+    try:
+        ydl = yt_dlp.YoutubeDL(ydl_opts)
+        with ydl:
+            info = ydl.extract_info(url, download=download)
+        return ydl, info
+    except yt_dlp.utils.DownloadError as exc:
+        if _BOT_CHECK_SIGNATURE not in str(exc):
+            raise
+
+    last_error: Exception = RuntimeError("no browser cookies were usable")
+    for browser in _COOKIE_BROWSER_FALLBACKS:
+        try:
+            ydl = yt_dlp.YoutubeDL({**ydl_opts, "cookiesfrombrowser": (browser,)})
+            with ydl:
+                info = ydl.extract_info(url, download=download)
+            return ydl, info
+        except Exception as exc:  # noqa: BLE001 -- try the next browser
+            last_error = exc
+            continue
+
+    raise RuntimeError(
+        "YouTube is asking to verify you're not a bot, and no browser login could be used automatically. "
+        "Make sure you're logged into YouTube in Chrome, Edge, or Firefox on this computer, close the browser "
+        "(so its cookie file isn't locked), and try again."
+    ) from last_error
+
+
 def fetch_video_info(url: str) -> VideoInfo:
     """Raises on an invalid/private/unavailable URL (yt-dlp's own
     `DownloadError`) -- the caller reports that as a plain error message."""
     ydl_opts = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    _, info = _run_ydl(ydl_opts, url, download=False)
 
     heights = {
         int(fmt["height"])
@@ -95,9 +136,7 @@ def download_youtube_video(
         "noprogress": True,  # we report progress via progress_hooks instead of yt-dlp's own stdout bar
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-
+    ydl, info = _run_ydl(ydl_opts, url, download=True)
     return _final_download_path(ydl, info, "mp4")
 
 
@@ -123,7 +162,5 @@ def download_youtube_audio(
         "noprogress": True,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-
+    ydl, info = _run_ydl(ydl_opts, url, download=True)
     return _final_download_path(ydl, info, "mp3")
