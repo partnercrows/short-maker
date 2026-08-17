@@ -9,6 +9,20 @@ use tauri_plugin_shell::ShellExt;
 /// previously had to run it by hand and remember to stop it themselves).
 struct BackendProcess(Mutex<Option<CommandChild>>);
 
+/// The updater plugin's `downloadAndInstall()` launches the new
+/// installer while this app (and its sidecar) is still fully running --
+/// the installer then fails to overwrite short-maker-backend.exe because
+/// our own sidecar still has that exact file open. The frontend calls this
+/// right before `downloadAndInstall()` so the installer's target file is
+/// already free by the time it runs, instead of racing it.
+#[tauri::command]
+fn stop_backend_sidecar(app_handle: tauri::AppHandle) {
+  if let Some(child) = app_handle.state::<BackendProcess>().0.lock().unwrap().take() {
+    let _ = child.kill();
+  }
+  kill_orphaned_backend_processes();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -19,6 +33,7 @@ pub fn run() {
     .plugin(tauri_plugin_http::init())
     .plugin(tauri_plugin_shell::init())
     .manage(BackendProcess(Mutex::new(None)))
+    .invoke_handler(tauri::generate_handler![stop_backend_sidecar])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
