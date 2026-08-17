@@ -1,6 +1,9 @@
 export type Language = "id" | "en";
 
 const dict = {
+  app_starting_up: { id: "Menyiapkan aplikasi...", en: "Starting up..." },
+  app_backend_retry: { id: "Coba Lagi", en: "Retry" },
+
   nav_ai_clipper: { id: "AI Clipper", en: "AI Clipper" },
   nav_history: { id: "Riwayat", en: "History" },
   nav_youtube_download: { id: "Unduh YouTube", en: "Download YouTube" },

@@ -17,6 +17,34 @@ async function getToken(): Promise<string> {
   return cachedToken!;
 }
 
+// The backend sidecar is a large PyInstaller onefile executable (bundles
+// faster-whisper, cv2, yt-dlp, ...) that takes a few seconds to self-extract
+// and start listening -- calling straight into the app during that window
+// previously surfaced a raw "error sending request" failure. App.tsx polls
+// this before rendering the real UI so the user sees a loading state instead.
+export async function waitForBackendReady(
+  onAttempt?: (attempt: number, elapsedMs: number) => void,
+  timeoutMs = 60_000,
+  intervalMs = 400,
+): Promise<void> {
+  const start = Date.now();
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    onAttempt?.(attempt, Date.now() - start);
+    try {
+      const res = await tauriFetch(`${API_BASE}/health`);
+      if (res.ok) return;
+    } catch {
+      // Not listening yet -- keep polling.
+    }
+    if (Date.now() - start > timeoutMs) {
+      throw new Error("The backend didn't start in time. Try restarting the app.");
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 async function request<T>(path: string, options: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
