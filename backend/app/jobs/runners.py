@@ -69,29 +69,40 @@ def run_analyze_job(
 
         analysis_dir = settings.project_analysis_dir(project_id)
         analysis_dir.mkdir(parents=True, exist_ok=True)
+        transcript_path = analysis_dir / "transcript.json"
 
-        job_manager.update_progress(job_id, 10, "Extracting audio")
-        audio_path = analysis_dir / "audio.wav"
-        extract_audio(project["source_video_path"], str(audio_path))
-        _raise_if_cancelled(job_id)
-
-        total_duration = project["source_duration"] or 0.0
-        job_manager.update_progress(job_id, 30, f"Transcribing (0:00 / {_format_mmss(total_duration)})")
-
-        def on_transcribe_progress(fraction: float) -> None:
+        if transcript_path.is_file():
+            # A prior attempt on this project already finished the slow part
+            # (audio extraction + transcription) -- if this run is a retry
+            # after e.g. the AI provider step failing, redoing minutes of
+            # transcription over again just to reach that same step is pure
+            # waste. The source video is immutable for a project once
+            # created, so the existing transcript is always still valid.
+            job_manager.update_progress(job_id, 55, "Reusing existing transcript")
+            transcript = TranscriptResult.model_validate_json(transcript_path.read_text(encoding="utf-8"))
+        else:
+            job_manager.update_progress(job_id, 10, "Extracting audio")
+            audio_path = analysis_dir / "audio.wav"
+            extract_audio(project["source_video_path"], str(audio_path))
             _raise_if_cancelled(job_id)
-            elapsed = fraction * total_duration
-            step_label = f"Transcribing ({_format_mmss(elapsed)} / {_format_mmss(total_duration)})"
-            job_manager.update_progress(job_id, 30 + fraction * 30, step_label)
 
-        try:
-            transcriber = get_transcriber("cuda", "float16") if use_gpu else get_transcriber()
-        except Exception:  # noqa: BLE001 -- GPU requested but not actually usable; don't fail the whole job over it
-            job_manager.update_progress(job_id, 30, "GPU unavailable, falling back to CPU for transcription")
-            transcriber = get_transcriber()
+            total_duration = project["source_duration"] or 0.0
+            job_manager.update_progress(job_id, 30, f"Transcribing (0:00 / {_format_mmss(total_duration)})")
 
-        transcript = transcriber.transcribe(str(audio_path), on_progress=on_transcribe_progress)
-        (analysis_dir / "transcript.json").write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
+            def on_transcribe_progress(fraction: float) -> None:
+                _raise_if_cancelled(job_id)
+                elapsed = fraction * total_duration
+                step_label = f"Transcribing ({_format_mmss(elapsed)} / {_format_mmss(total_duration)})"
+                job_manager.update_progress(job_id, 30 + fraction * 30, step_label)
+
+            try:
+                transcriber = get_transcriber("cuda", "float16") if use_gpu else get_transcriber()
+            except Exception:  # noqa: BLE001 -- GPU requested but not actually usable; don't fail the whole job over it
+                job_manager.update_progress(job_id, 30, "GPU unavailable, falling back to CPU for transcription")
+                transcriber = get_transcriber()
+
+            transcript = transcriber.transcribe(str(audio_path), on_progress=on_transcribe_progress)
+            transcript_path.write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
         _raise_if_cancelled(job_id)
 
         job_manager.update_progress(job_id, 60, "Finding best moments (waiting for AI provider)")
