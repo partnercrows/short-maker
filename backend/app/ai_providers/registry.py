@@ -14,12 +14,21 @@ side (PRD S5/S40).
 
 from __future__ import annotations
 
+import time
 from enum import StrEnum
 
 import httpx
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from pydantic import BaseModel
+
+# Transient provider overload (Gemini's 503 UNAVAILABLE "high demand", rate
+# limits, upstream 5xx) shouldn't fail a whole analyze/generate job outright
+# -- a short retry-with-backoff usually rides it out, since these spikes are
+# typically seconds-to-a-minute long, not sustained outages.
+_RETRY_BACKOFF_SECONDS = [2, 5, 10]
+_RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 OPENAI_COMPATIBLE_DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
@@ -111,13 +120,35 @@ async def _list_models_openai_compatible(creds: ProviderCredentials) -> list[Mod
     return [ModelInfo(id=item["id"], display_name=item.get("id", "")) for item in items if item.get("id")]
 
 
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, genai_errors.ServerError):
+        return True  # Gemini 5xx, including the common 503 UNAVAILABLE "high demand"
+    if isinstance(exc, genai_errors.ClientError) and exc.code == 429:
+        return True  # Gemini rate limit (RESOURCE_EXHAUSTED)
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in _RETRYABLE_HTTP_STATUS_CODES:
+        return True
+    return False
+
+
 def complete_chat(config: ProviderConfig, system_prompt: str, user_prompt: str) -> str:
     """One vendor-agnostic entry point: send a system+user prompt, get the
     model's text response back. Raises on failure -- callers (clip
-    selection, Social Kit) decide how to handle/report that."""
-    if config.provider_type == ProviderType.GEMINI:
-        return _complete_chat_gemini(config, system_prompt, user_prompt)
-    return _complete_chat_openai_compatible(config, system_prompt, user_prompt)
+    selection, Social Kit) decide how to handle/report that.
+
+    Transparently retries with backoff on a transient provider error
+    (rate limit / overload / upstream 5xx); any other error, or exhausting
+    the retries, raises immediately."""
+    for attempt, delay in enumerate([0, *_RETRY_BACKOFF_SECONDS]):
+        if delay:
+            time.sleep(delay)
+        try:
+            if config.provider_type == ProviderType.GEMINI:
+                return _complete_chat_gemini(config, system_prompt, user_prompt)
+            return _complete_chat_openai_compatible(config, system_prompt, user_prompt)
+        except Exception as exc:  # noqa: BLE001 -- re-raised immediately unless retryable
+            if not _is_retryable(exc) or attempt == len(_RETRY_BACKOFF_SECONDS):
+                raise
+    raise AssertionError("unreachable")  # the loop above always returns or raises
 
 
 def _complete_chat_gemini(config: ProviderConfig, system_prompt: str, user_prompt: str) -> str:
