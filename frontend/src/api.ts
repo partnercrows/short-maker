@@ -89,6 +89,9 @@ export interface Project {
   source_resolution: string | null;
   status: string;
   created_at: string;
+  // What this project's folder occupies on disk right now (source copy +
+  // analysis + every clip's outputs), measured by the backend on read.
+  storage_bytes: number;
 }
 
 export interface Job {
@@ -170,6 +173,22 @@ export function analyzeProject(
 
 export function listProjects(): Promise<Project[]> {
   return request("/projects");
+}
+
+export interface DeleteProjectsResult {
+  deleted_projects: number;
+  freed_bytes: number;
+  failed_paths: string[];
+}
+
+// Deleting drops the project's whole folder, which can be hundreds of MB per
+// project -- slower than a normal request, hence the raised timeouts.
+export function deleteProject(projectId: string): Promise<DeleteProjectsResult> {
+  return request(`/projects/${projectId}`, { method: "DELETE" }, 5 * 60_000);
+}
+
+export function deleteAllProjects(): Promise<DeleteProjectsResult> {
+  return request("/projects", { method: "DELETE" }, 15 * 60_000);
 }
 
 export interface SystemCapabilities {

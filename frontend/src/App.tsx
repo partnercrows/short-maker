@@ -37,6 +37,10 @@ function App() {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [view, setView] = useState<View>("clipper");
   const [openProject, setOpenProject] = useState<Project | null>(null);
+  // Bumped to force a fresh AiClipperView when the project it's showing is
+  // deleted -- the view keeps the loaded project/clips in its own state, and
+  // that state points at files that no longer exist.
+  const [clipperGeneration, setClipperGeneration] = useState(0);
   const [backendStatus, setBackendStatus] = useState<"loading" | "ready" | "error">("loading");
   const [backendError, setBackendError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
@@ -79,6 +83,14 @@ function App() {
     setView("clipper");
   }
 
+  function handleProjectsDeleted(deleted: string[] | "all") {
+    if (!openProject) return;
+    if (deleted === "all" || deleted.includes(openProject.id)) {
+      setOpenProject(null);
+      setClipperGeneration((n) => n + 1);
+    }
+  }
+
   if (backendStatus !== "ready") {
     return (
       <StartupGate
@@ -96,9 +108,20 @@ function App() {
         {/* Kept mounted (just hidden) so an in-progress analyze/generate job and its
             polling loop survive switching to another menu, instead of being destroyed. */}
         <div className={view === "clipper" ? "" : "hidden"}>
-          <AiClipperView settings={settings} onSettingsChange={handleSettingsChange} openProject={openProject} />
+          <AiClipperView
+            key={clipperGeneration}
+            settings={settings}
+            onSettingsChange={handleSettingsChange}
+            openProject={openProject}
+          />
         </div>
-        {view === "history" && <HistoryView language={settings.language} onOpenProject={handleOpenProject} />}
+        {view === "history" && (
+          <HistoryView
+            language={settings.language}
+            onOpenProject={handleOpenProject}
+            onProjectsDeleted={handleProjectsDeleted}
+          />
+        )}
         {view === "youtube_download" && <YouTubeDownloadView language={settings.language} />}
         {view === "settings" && <SettingsView settings={settings} onChange={handleSettingsChange} />}
       </main>

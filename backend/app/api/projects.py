@@ -8,9 +8,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.schemas import AnalyzeRequest, Project, ProjectCreate
+from app.api.schemas import AnalyzeRequest, DeleteProjectsResult, Project, ProjectCreate
 from app.core.config import get_settings
 from app.core.ffmpeg_utils import probe_metadata
+from app.core.project_storage import StorageDeletion, delete_directory, directory_bytes
 from app.core.security import require_local_token
 from app.db.connection import get_connection
 from app.jobs.manager import job_manager
@@ -58,7 +59,7 @@ def create_project(payload: ProjectCreate) -> Project:
 def list_projects() -> list[Project]:
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
-    return [Project(**dict(row)) for row in rows]
+    return [_with_storage(dict(row)) for row in rows]
 
 
 @router.get("/{project_id}", response_model=Project)
@@ -67,14 +68,57 @@ def get_project(project_id: str) -> Project:
         row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    return Project(**dict(row))
+    return _with_storage(dict(row))
 
 
-@router.delete("/{project_id}", status_code=204)
-def delete_project(project_id: str) -> None:
+def _with_storage(row: dict) -> Project:
+    """`storage_bytes` is measured, not stored: it's what the project's folder
+    actually occupies right now, which is what the delete confirmation needs
+    to be honest about how much space removing it frees."""
+    settings = get_settings()
+    return Project(**row, storage_bytes=directory_bytes(settings.project_dir(row["id"])))
+
+
+@router.delete("", response_model=DeleteProjectsResult)
+def delete_all_projects() -> DeleteProjectsResult:
+    """Clears the whole history. Each project's folder goes with it -- the
+    point of the action is reclaiming the disk, not just emptying a list."""
+    with get_connection() as conn:
+        project_ids = [row["id"] for row in conn.execute("SELECT id FROM projects").fetchall()]
+
+    deletion = StorageDeletion()
+    for project_id in project_ids:
+        deletion = deletion.merge(_delete_project_storage(project_id))
+
+    with get_connection() as conn:
+        conn.execute("DELETE FROM projects")
+        conn.commit()
+
+    return DeleteProjectsResult(
+        deleted_projects=len(project_ids), freed_bytes=deletion.freed_bytes, failed_paths=deletion.failed_paths
+    )
+
+
+@router.delete("/{project_id}", response_model=DeleteProjectsResult)
+def delete_project(project_id: str) -> DeleteProjectsResult:
+    get_project(project_id)  # 404s if it's already gone, before deleting anything
+    deletion = _delete_project_storage(project_id)
+
+    # Clips, social kits and jobs all cascade off this row (schema.py), and
+    # the row goes even if some file underneath refused to be deleted --
+    # leaving the history entry behind would make the failure unfixable from
+    # the UI. The paths that survived are reported instead.
     with get_connection() as conn:
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         conn.commit()
+
+    return DeleteProjectsResult(
+        deleted_projects=1, freed_bytes=deletion.freed_bytes, failed_paths=deletion.failed_paths
+    )
+
+
+def _delete_project_storage(project_id: str) -> StorageDeletion:
+    return delete_directory(get_settings().project_dir(project_id))
 
 
 @router.post("/{project_id}/analyze", response_model=Job)

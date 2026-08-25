@@ -32,6 +32,18 @@ class Project(BaseModel):
     status: str
     created_at: str
     updated_at: str
+    # Measured from disk on read (not persisted): what this project's folder
+    # currently occupies, so the UI can say what deleting it frees.
+    storage_bytes: int = 0
+
+
+class DeleteProjectsResult(BaseModel):
+    deleted_projects: int
+    freed_bytes: int
+    # Files the OS refused to delete (locked by a preview or an in-flight
+    # ffmpeg, typically) -- the project row is gone regardless, so the UI
+    # reports these rather than pretending everything was cleaned up.
+    failed_paths: list[str] = []
 
 
 class Clip(BaseModel):
