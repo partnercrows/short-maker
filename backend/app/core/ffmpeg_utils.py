@@ -66,12 +66,25 @@ def probe_duration(path: str) -> float:
     return float(json.loads(result.stdout)["format"]["duration"])
 
 
+class NoVideoStreamError(RuntimeError):
+    """Raised when a file we expected to be a video has no picture track at
+    all -- either it never had one, or (the case actually seen in the wild)
+    it's a partially-downloaded file whose video track stops long before its
+    audio does, so a cut taken past that point contains audio only."""
+
+
 class VideoMetadata:
-    def __init__(self, duration: float, width: int, height: int, fps: float) -> None:
+    def __init__(self, duration: float, width: int, height: int, fps: float, video_duration: float | None = None) -> None:
         self.duration = duration
         self.width = width
         self.height = height
         self.fps = fps
+        # How far the *picture* track actually runs. Normally the same as
+        # `duration` (the container's, i.e. the longest stream's), but an
+        # interrupted download can leave a file whose audio runs the full
+        # length while the video stops early -- and everything downstream of
+        # a cut (crop resolution, render) needs frames, not just audio.
+        self.video_duration = duration if video_duration is None else video_duration
 
 
 def probe_metadata(video_path: str) -> VideoMetadata:
@@ -83,7 +96,7 @@ def probe_metadata(video_path: str) -> VideoMetadata:
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height,r_frame_rate",
+            "stream=width,height,r_frame_rate,duration",
             "-show_entries",
             "format=duration",
             "-of",
@@ -95,15 +108,33 @@ def probe_metadata(video_path: str) -> VideoMetadata:
         text=True,
     )
     data = json.loads(result.stdout)
-    stream = data["streams"][0]
+    streams = data.get("streams") or []
+    if not streams:
+        raise NoVideoStreamError(f"No video stream found in {video_path}")
+    stream = streams[0]
     num, den = stream["r_frame_rate"].split("/")
     fps = float(num) / float(den) if float(den) != 0 else 0.0
+    duration = float(data["format"]["duration"])
     return VideoMetadata(
-        duration=float(data["format"]["duration"]),
+        duration=duration,
         width=int(stream["width"]),
         height=int(stream["height"]),
         fps=fps,
+        video_duration=_stream_duration(stream, duration),
     )
+
+
+def _stream_duration(stream: dict, container_duration: float) -> float:
+    """The video stream's own duration, falling back to the container's when
+    the format doesn't carry per-stream durations (common for Matroska/WebM),
+    and never trusting a value longer than the container itself."""
+    try:
+        value = float(stream["duration"])
+    except (KeyError, TypeError, ValueError):
+        return container_duration
+    if value <= 0:
+        return container_duration
+    return min(value, container_duration)
 
 
 def extract_audio(video_path: str, output_wav_path: str, sample_rate: int = 16000) -> None:

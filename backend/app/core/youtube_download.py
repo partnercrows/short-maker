@@ -17,7 +17,7 @@ from typing import Callable
 import yt_dlp
 from pydantic import BaseModel
 
-from app.core.ffmpeg_utils import ffmpeg_path
+from app.core.ffmpeg_utils import NoVideoStreamError, ffmpeg_path, probe_metadata
 
 # YouTube occasionally throws up an anti-bot wall ("Sign in to confirm
 # you're not a bot") that blocks plain, unauthenticated requests -- yt-dlp's
@@ -137,7 +137,39 @@ def download_youtube_video(
     }
 
     ydl, info = _run_ydl(ydl_opts, url, download=True)
-    return _final_download_path(ydl, info, "mp4")
+    path = _final_download_path(ydl, info, "mp4")
+    _verify_video_track_is_complete(path, info.get("duration"))
+    return path
+
+
+def _verify_video_track_is_complete(path: Path, expected_duration: float | None) -> None:
+    """Rejects a download whose picture track stopped early.
+
+    A transport error partway through the video stream can still end with a
+    successful-looking merge: the audio track runs the full length, the video
+    track stops where the download broke, and the container reports the
+    longer of the two. Nothing about the file looks wrong until a clip is cut
+    past that point and comes out with no frames -- so catch it here, while
+    the user is still on the screen that can just download it again."""
+    try:
+        metadata = probe_metadata(str(path))
+    except NoVideoStreamError as exc:
+        raise RuntimeError(
+            f"The downloaded file has no video track at all: {path.name}. Please try the download again."
+        ) from exc
+    except Exception:  # noqa: BLE001 -- can't verify (no ffprobe, odd container); don't block a download over it
+        return
+
+    reference = max(expected_duration or 0.0, metadata.duration)
+    # 2% + 1s of slack: a normal merge can end a fraction of a second short of
+    # the audio without a single frame actually missing.
+    if reference and metadata.video_duration < reference * 0.98 - 1.0:
+        raise RuntimeError(
+            f"The download finished but its video track is incomplete -- only "
+            f"{metadata.video_duration / 60:.1f} of {reference / 60:.1f} minutes of picture arrived "
+            f"(the audio is complete). The file was kept at {path.name}, but don't use it for a project: "
+            "run the download again."
+        )
 
 
 def download_youtube_audio(

@@ -15,7 +15,7 @@ from pathlib import Path
 from app.ai_providers.registry import ProviderConfig
 from app.core.clip_export import copy_clip_to_folder, export_clip_to_folder
 from app.core.config import get_settings
-from app.core.ffmpeg_utils import cut_subclip, extract_audio, probe_metadata
+from app.core.ffmpeg_utils import NoVideoStreamError, VideoMetadata, cut_subclip, extract_audio, probe_metadata
 from app.core.gpu_pack import download_gpu_pack
 from app.core.gpu_utils import ensure_cuda_dlls_on_path
 from app.core.system_capabilities import probe_capabilities
@@ -54,6 +54,24 @@ class JobCancelled(Exception):
 def _raise_if_cancelled(job_id: str) -> None:
     if job_manager.is_cancelled(job_id):
         raise JobCancelled()
+
+
+def _usable_video_duration(source_video_path: str, container_duration: float | None) -> float:
+    """How far into the source there are actually *frames* to work with.
+
+    A download interrupted partway through (the 403-mid-download case) can
+    leave a file whose audio runs the full length while its picture track
+    stops early. The container duration -- what `projects.source_duration`
+    holds -- reports the longer of the two, so without this every clip past
+    the last frame would be proposed, cut into an audio-only segment, and
+    then fail deep in the crop stage."""
+    try:
+        metadata = probe_metadata(source_video_path)
+    except Exception:  # noqa: BLE001 -- an unprobeable source is the next stage's problem to report, not this helper's
+        return container_duration or 0.0
+    if container_duration:
+        return min(metadata.video_duration, container_duration)
+    return metadata.video_duration
 
 
 def run_analyze_job(
@@ -106,7 +124,8 @@ def run_analyze_job(
         _raise_if_cancelled(job_id)
 
         job_manager.update_progress(job_id, 60, "Finding best moments (waiting for AI provider)")
-        candidates = select_clips(provider, transcript, num_clips, video_duration=project["source_duration"])
+        usable_duration = _usable_video_duration(project["source_video_path"], project["source_duration"])
+        candidates = select_clips(provider, transcript, num_clips, video_duration=usable_duration)
         (analysis_dir / "clips.json").write_text(json.dumps([c.model_dump() for c in candidates], indent=2), encoding="utf-8")
         _raise_if_cancelled(job_id)
 
@@ -153,6 +172,35 @@ def _save_candidate_clips(project_id: str, candidates: list, transcript: Transcr
         conn.commit()
 
 
+def _raise_if_beyond_last_frame(project, clip) -> None:
+    """Stops a clip that starts past the source's last video frame before it
+    reaches the crop stage, where the only symptom was an opaque
+    "list index out of range" from probing an audio-only segment."""
+    usable = _usable_video_duration(project["source_video_path"], project["source_duration"])
+    if clip["start_time"] < usable:
+        return
+    raise ValueError(
+        f"This clip starts at {_format_mmss(clip['start_time'])}, but the source video only has picture "
+        f"up to {_format_mmss(usable)} (its audio runs to {_format_mmss(project['source_duration'] or usable)}) "
+        "-- the source file is incomplete, most likely a download that was interrupted partway through. "
+        "Re-download the full video, create the project again from it, and re-run Analyze."
+    )
+
+
+def _probe_subclip(subclip_path: Path) -> VideoMetadata:
+    """`probe_metadata` on a freshly cut segment, with the audio-only case
+    (a cut that landed past the source's last frame despite the pre-cut
+    guard) reported as something a user can act on."""
+    try:
+        return probe_metadata(str(subclip_path))
+    except NoVideoStreamError as exc:
+        raise ValueError(
+            "The cut segment came out with audio but no picture -- the source video file is incomplete "
+            "(its video track is shorter than its audio track). Re-download the full video, create the "
+            "project again from it, and re-run Analyze."
+        ) from exc
+
+
 def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool, output_folder: str | None = None) -> None:
     settings = get_settings()
     try:
@@ -170,11 +218,12 @@ def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool, output_f
         final_path = clip_dir / "video.mp4"
 
         job_manager.update_progress(job_id, 15, "Cutting segment")
+        _raise_if_beyond_last_frame(project, clip)
         cut_subclip(project["source_video_path"], clip["start_time"], clip["duration"], str(subclip_path))
         _raise_if_cancelled(job_id)
 
         job_manager.update_progress(job_id, 30, "Resolving active speaker crop")
-        metadata = probe_metadata(str(subclip_path))
+        metadata = _probe_subclip(subclip_path)
         plan = resolve_reframe(
             video_path=str(subclip_path),
             requested_mode=ReframeMode.AUTO,
@@ -287,9 +336,10 @@ def run_render_subtitle_job(job_id: str, clip_id: str) -> None:
         if not rendered_path.exists():
             job_manager.update_progress(job_id, 5, "Rebuilding clip (one-time, no video previously saved)")
             subclip_path = clip_dir / "source_segment.mp4"
+            _raise_if_beyond_last_frame(project, clip)
             cut_subclip(project["source_video_path"], clip["start_time"], clip["duration"], str(subclip_path))
             _raise_if_cancelled(job_id)
-            metadata = probe_metadata(str(subclip_path))
+            metadata = _probe_subclip(subclip_path)
             plan = resolve_reframe(
                 video_path=str(subclip_path),
                 requested_mode=ReframeMode.AUTO,

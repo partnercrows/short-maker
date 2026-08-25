@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.core import youtube_download
 
 
@@ -246,3 +248,39 @@ def test_download_youtube_video_progress_hook_reports_fraction(monkeypatch, tmp_
     hook({"status": "finished"})
 
     assert events == [(0.25, "Downloading video"), (1.0, "Merging video and audio")]
+
+
+def test_download_video_rejects_a_truncated_video_track(tmp_path, monkeypatch):
+    """A merge that succeeded with only part of the picture downloaded: audio
+    runs the full length, the video track stops early."""
+    from app.core.ffmpeg_utils import VideoMetadata
+
+    monkeypatch.setattr(
+        youtube_download,
+        "probe_metadata",
+        lambda path: VideoMetadata(duration=4204.5, width=1920, height=1080, fps=30.0, video_duration=1450.9),
+    )
+
+    with pytest.raises(RuntimeError, match="video track is incomplete"):
+        youtube_download._verify_video_track_is_complete(tmp_path / "video.mp4", 4204.5)
+
+
+def test_download_video_accepts_a_video_track_a_fraction_short(tmp_path, monkeypatch):
+    from app.core.ffmpeg_utils import VideoMetadata
+
+    monkeypatch.setattr(
+        youtube_download,
+        "probe_metadata",
+        lambda path: VideoMetadata(duration=600.0, width=1920, height=1080, fps=30.0, video_duration=599.6),
+    )
+
+    youtube_download._verify_video_track_is_complete(tmp_path / "video.mp4", 600.0)
+
+
+def test_download_video_skips_verification_when_the_file_cannot_be_probed(tmp_path, monkeypatch):
+    def _boom(path):
+        raise RuntimeError("ffprobe not found")
+
+    monkeypatch.setattr(youtube_download, "probe_metadata", _boom)
+
+    youtube_download._verify_video_track_is_complete(tmp_path / "video.mp4", 600.0)

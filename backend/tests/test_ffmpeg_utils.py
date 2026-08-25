@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from unittest.mock import MagicMock
@@ -71,3 +72,46 @@ def test_convert_image_to_png_builds_single_frame_command(tmp_path, monkeypatch)
     cmd = captured["cmd"]
     assert "input.jpg" in cmd
     assert cmd[-1] == str(output_path)
+
+
+def _probe_stub(monkeypatch, payload):
+    monkeypatch.setattr(ffmpeg_utils, "ffprobe_path", lambda: "ffprobe")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, check, capture_output, text: MagicMock(stdout=json.dumps(payload)),
+    )
+
+
+def test_probe_metadata_reports_video_track_duration_separately(monkeypatch):
+    # An interrupted download: audio runs the full length, picture stops early.
+    _probe_stub(
+        monkeypatch,
+        {
+            "streams": [{"width": 1920, "height": 1080, "r_frame_rate": "30/1", "duration": "1450.983"}],
+            "format": {"duration": "4204.554"},
+        },
+    )
+
+    metadata = ffmpeg_utils.probe_metadata("truncated.mp4")
+
+    assert metadata.duration == pytest.approx(4204.554)
+    assert metadata.video_duration == pytest.approx(1450.983)
+
+
+def test_probe_metadata_falls_back_to_container_duration_without_stream_duration(monkeypatch):
+    _probe_stub(
+        monkeypatch,
+        {"streams": [{"width": 1280, "height": 720, "r_frame_rate": "25/1"}], "format": {"duration": "60.0"}},
+    )
+
+    metadata = ffmpeg_utils.probe_metadata("no-stream-duration.mkv")
+
+    assert metadata.video_duration == pytest.approx(60.0)
+
+
+def test_probe_metadata_raises_no_video_stream_error_for_audio_only_file(monkeypatch):
+    _probe_stub(monkeypatch, {"streams": [], "format": {"duration": "12.0"}})
+
+    with pytest.raises(ffmpeg_utils.NoVideoStreamError):
+        ffmpeg_utils.probe_metadata("audio-only.mp4")
