@@ -46,7 +46,7 @@ def test_extract_frame_builds_single_frame_command(tmp_path, monkeypatch):
     monkeypatch.setattr(ffmpeg_utils, "ffmpeg_path", lambda: "ffmpeg")
     captured = {}
     monkeypatch.setattr(
-        subprocess, "run", lambda cmd, check, capture_output: captured.setdefault("cmd", cmd) or MagicMock()
+        subprocess, "run", lambda cmd, check, capture_output, text: captured.setdefault("cmd", cmd) or MagicMock()
     )
 
     output_path = tmp_path / "frame.png"
@@ -63,7 +63,7 @@ def test_convert_image_to_png_builds_single_frame_command(tmp_path, monkeypatch)
     monkeypatch.setattr(ffmpeg_utils, "ffmpeg_path", lambda: "ffmpeg")
     captured = {}
     monkeypatch.setattr(
-        subprocess, "run", lambda cmd, check, capture_output: captured.setdefault("cmd", cmd) or MagicMock()
+        subprocess, "run", lambda cmd, check, capture_output, text: captured.setdefault("cmd", cmd) or MagicMock()
     )
 
     output_path = tmp_path / "out.png"
@@ -115,3 +115,30 @@ def test_probe_metadata_raises_no_video_stream_error_for_audio_only_file(monkeyp
 
     with pytest.raises(ffmpeg_utils.NoVideoStreamError):
         ffmpeg_utils.probe_metadata("audio-only.mp4")
+
+
+def test_run_surfaces_ffmpeg_stderr_instead_of_just_the_command(monkeypatch):
+    """A CalledProcessError stringifies to the command line alone, which told
+    the user nothing about why ffmpeg stopped."""
+    stderr = (
+        "ffmpeg version 8" + chr(10)
+        + "frame= 12 fps=3" + chr(13)
+        + "Conversion failed!" + chr(10)
+    ).encode()
+
+    def boom(cmd, check, capture_output, text):
+        raise subprocess.CalledProcessError(1, cmd, stderr=stderr)
+
+    monkeypatch.setattr(subprocess, "run", boom)
+
+    with pytest.raises(ffmpeg_utils.FfmpegError) as exc_info:
+        ffmpeg_utils._run(["C:/bin/ffmpeg.exe", "-i", "in.mp4", "out.mp4"])
+
+    message = str(exc_info.value)
+    assert "ffmpeg failed (exit 1)" in message
+    assert "Conversion failed!" in message
+    assert "frame=" not in message  # progress noise filtered out
+
+
+def test_stderr_tail_handles_empty_output():
+    assert ffmpeg_utils._stderr_tail(b"") == "no error output"

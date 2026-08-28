@@ -54,13 +54,39 @@ def ffprobe_path() -> str:
     return _find_binary("ffprobe")
 
 
+class FfmpegError(RuntimeError):
+    """ffmpeg/ffprobe exited non-zero.
+
+    `CalledProcessError`'s message is just the command line, so the actual
+    complaint -- the one line of ffmpeg stderr that says what went wrong --
+    never reached the job row. This carries that tail instead."""
+
+
+def _run(cmd: list[str], *, text: bool = False) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(cmd, check=True, capture_output=True, text=text)
+    except subprocess.CalledProcessError as exc:
+        raise FfmpegError(f"{Path(cmd[0]).stem} failed (exit {exc.returncode}): {_stderr_tail(exc.stderr)}") from exc
+
+
+def _stderr_tail(stderr: bytes | str | None, max_lines: int = 4) -> str:
+    """The last few meaningful stderr lines. ffmpeg's stderr is mostly banner
+    and progress noise; the reason it stopped is at the end."""
+    if not stderr:
+        return "no error output"
+    text = stderr.decode("utf-8", "replace") if isinstance(stderr, bytes) else stderr
+    # splitlines() splits on CR as well as LF, so ffmpeg's carriage-returned
+    # progress bar arrives as separate lines to filter out below.
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    meaningful = [line for line in lines if not line.startswith(("frame=", "size=", "video:", "  "))]
+    return " | ".join((meaningful or lines)[-max_lines:])
+
+
 def probe_duration(path: str) -> float:
     """Duration in seconds -- works for an audio-only file too, unlike
     `probe_metadata()` which requires a video stream."""
-    result = subprocess.run(
+    result = _run(
         [ffprobe_path(), "-v", "error", "-show_entries", "format=duration", "-of", "json", path],
-        check=True,
-        capture_output=True,
         text=True,
     )
     return float(json.loads(result.stdout)["format"]["duration"])
@@ -88,7 +114,7 @@ class VideoMetadata:
 
 
 def probe_metadata(video_path: str) -> VideoMetadata:
-    result = subprocess.run(
+    result = _run(
         [
             ffprobe_path(),
             "-v",
@@ -103,8 +129,6 @@ def probe_metadata(video_path: str) -> VideoMetadata:
             "json",
             video_path,
         ],
-        check=True,
-        capture_output=True,
         text=True,
     )
     data = json.loads(result.stdout)
@@ -139,7 +163,7 @@ def _stream_duration(stream: dict, container_duration: float) -> float:
 
 def extract_audio(video_path: str, output_wav_path: str, sample_rate: int = 16000) -> None:
     Path(output_wav_path).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    _run(
         [
             ffmpeg_path(),
             "-y",
@@ -152,8 +176,6 @@ def extract_audio(video_path: str, output_wav_path: str, sample_rate: int = 1600
             str(sample_rate),
             output_wav_path,
         ],
-        check=True,
-        capture_output=True,
     )
 
 
@@ -161,7 +183,7 @@ def slice_audio(audio_path: str, start: float, duration: float, output_path: str
     """Lossless sub-range cut of an audio file (no re-encode) -- used to
     split long audio into smaller pieces before handing it to Whisper."""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    _run(
         [
             ffmpeg_path(),
             "-y",
@@ -175,8 +197,6 @@ def slice_audio(audio_path: str, start: float, duration: float, output_path: str
             "copy",
             output_path,
         ],
-        check=True,
-        capture_output=True,
     )
 
 
@@ -184,7 +204,7 @@ def extract_frame(video_path: str, timestamp: float, output_path: str) -> None:
     """Grabs a single still frame at `timestamp` seconds -- used to seed an
     Intro Frame image from a clip's own rendered video."""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    _run(
         [
             ffmpeg_path(),
             "-y",
@@ -196,8 +216,6 @@ def extract_frame(video_path: str, timestamp: float, output_path: str) -> None:
             "1",
             output_path,
         ],
-        check=True,
-        capture_output=True,
     )
 
 
@@ -206,16 +224,14 @@ def convert_image_to_png(input_path: str, output_path: str) -> None:
     path -- used to normalize an uploaded Intro Frame image regardless of the
     format it was uploaded in."""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    _run(
         [ffmpeg_path(), "-y", "-i", input_path, "-frames:v", "1", output_path],
-        check=True,
-        capture_output=True,
     )
 
 
 def cut_subclip(video_path: str, start: float, duration: float, output_path: str) -> None:
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    _run(
         [
             ffmpeg_path(),
             "-y",
@@ -237,6 +253,4 @@ def cut_subclip(video_path: str, start: float, duration: float, output_path: str
             "128k",
             output_path,
         ],
-        check=True,
-        capture_output=True,
     )

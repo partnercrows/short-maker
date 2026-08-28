@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import threading
+
+import pytest
+
 from app.core.ffmpeg_utils import VideoMetadata
 from app.db.connection import get_connection, init_db
 from app.jobs import runners
@@ -71,3 +75,47 @@ def test_generate_job_proceeds_when_clip_is_inside_the_video_track(monkeypatch):
 
     assert len(cuts) == 1
     assert job_manager.get(job.id).status == "completed"
+
+
+def test_render_slot_queues_instead_of_running_every_clip_at_once():
+    """Eight simultaneous ffmpeg encodes is what killed the cut with a bare
+    AVERROR_EXTERNAL; extra clips must wait rather than pile on."""
+    init_db()
+    slots = threading.BoundedSemaphore(1)
+    runners._RENDER_SLOTS, original = slots, runners._RENDER_SLOTS
+    try:
+        holder = job_manager.create(JobType.GENERATE_CLIP)
+        waiter = job_manager.create(JobType.GENERATE_CLIP)
+        entered = threading.Event()
+
+        def second_render():
+            with runners._render_slot(waiter.id):
+                entered.set()
+
+        with runners._render_slot(holder.id):
+            thread = threading.Thread(target=second_render, daemon=True)
+            thread.start()
+            assert not entered.wait(timeout=1.5)  # still queued behind the first
+            assert job_manager.get(waiter.id).current_step == "Waiting for another clip to finish rendering"
+
+        assert entered.wait(timeout=5)  # slot released -> it runs
+        thread.join(timeout=5)
+    finally:
+        runners._RENDER_SLOTS = original
+
+
+def test_render_slot_honours_cancellation_while_queued():
+    init_db()
+    slots = threading.BoundedSemaphore(1)
+    runners._RENDER_SLOTS, original = slots, runners._RENDER_SLOTS
+    try:
+        holder = job_manager.create(JobType.GENERATE_CLIP)
+        waiter = job_manager.create(JobType.GENERATE_CLIP)
+        job_manager.cancel(waiter.id)
+
+        with runners._render_slot(holder.id):
+            with pytest.raises(runners.JobCancelled):
+                with runners._render_slot(waiter.id):
+                    pass
+    finally:
+        runners._RENDER_SLOTS = original

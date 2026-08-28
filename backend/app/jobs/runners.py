@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 from app.ai_providers.registry import ProviderConfig
 from app.core.clip_export import copy_clip_to_folder, export_clip_to_folder
@@ -35,6 +38,16 @@ from app.pipeline.transcribe import TranscriptResult, get_transcriber
 TARGET_WIDTH = 720
 TARGET_HEIGHT = 1280
 
+# Every clip render runs ffmpeg (VP9/H.264 decode + x264 encode), which
+# already saturates the machine's cores on its own. Generating a batch of
+# clips used to start one thread -- and one ffmpeg -- per clicked clip, all
+# at once: eight concurrent encodes of a 1080p60 source thrashed the box hard
+# enough that some ffmpeg processes died mid-cut with a bare
+# AVERROR_EXTERNAL, which surfaced as a "Gagal membuat klip" the user could
+# do nothing with. Queue them instead: same throughput, no failures.
+MAX_CONCURRENT_RENDERS = 2
+_RENDER_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_RENDERS)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -54,6 +67,23 @@ class JobCancelled(Exception):
 def _raise_if_cancelled(job_id: str) -> None:
     if job_manager.is_cancelled(job_id):
         raise JobCancelled()
+
+
+@contextmanager
+def _render_slot(job_id: str) -> Iterator[None]:
+    """Holds one of the render slots for the duration of the block, keeping
+    the job cancellable (and honest about why nothing is happening) while it
+    waits for its turn."""
+    waiting_announced = False
+    while not _RENDER_SLOTS.acquire(timeout=0.5):
+        _raise_if_cancelled(job_id)
+        if not waiting_announced:
+            job_manager.update_progress(job_id, 5, "Waiting for another clip to finish rendering")
+            waiting_announced = True
+    try:
+        yield
+    finally:
+        _RENDER_SLOTS.release()
 
 
 def _usable_video_duration(source_video_path: str, container_duration: float | None) -> float:
@@ -217,44 +247,45 @@ def run_generate_job(job_id: str, clip_id: str, include_subtitle: bool, output_f
         rendered_path = settings.clip_rendered_path(clip["project_id"], clip_id)
         final_path = clip_dir / "video.mp4"
 
-        job_manager.update_progress(job_id, 15, "Cutting segment")
-        _raise_if_beyond_last_frame(project, clip)
-        cut_subclip(project["source_video_path"], clip["start_time"], clip["duration"], str(subclip_path))
-        _raise_if_cancelled(job_id)
+        with _render_slot(job_id):
+            job_manager.update_progress(job_id, 15, "Cutting segment")
+            _raise_if_beyond_last_frame(project, clip)
+            cut_subclip(project["source_video_path"], clip["start_time"], clip["duration"], str(subclip_path))
+            _raise_if_cancelled(job_id)
 
-        job_manager.update_progress(job_id, 30, "Resolving active speaker crop")
-        metadata = _probe_subclip(subclip_path)
-        plan = resolve_reframe(
-            video_path=str(subclip_path),
-            requested_mode=ReframeMode.AUTO,
-            source_width=metadata.width,
-            source_height=metadata.height,
-            target_width=TARGET_WIDTH,
-            target_height=TARGET_HEIGHT,
-        )
-        _raise_if_cancelled(job_id)
-
-        job_manager.update_progress(job_id, 55, "Rendering")
-        # `rendered_path` (the crop+audio master, no subtitles) is kept
-        # permanently from here on -- Subtitle Studio re-derives video.mp4
-        # from it any time the subtitle document changes, without ever
-        # re-cropping or re-transcribing.
-        render_clip(str(subclip_path), plan, str(rendered_path), TARGET_WIDTH, TARGET_HEIGHT)
-        _raise_if_cancelled(job_id)
-
-        subtitle_path: str | None = None
-        subtitle_json_path: str | None = None
-        if include_subtitle:
-            job_manager.update_progress(job_id, 80, "Burning subtitles")
-            subtitle_json_path = str(settings.clip_subtitle_json_path(clip["project_id"], clip_id))
-            subtitle_path = str(clip_dir / "subtitle.ass")
-            _burn_default_subtitles_for_clip(
-                clip_id, clip["project_id"], clip["start_time"], clip["end_time"], str(rendered_path), subtitle_json_path, subtitle_path, str(final_path)
+            job_manager.update_progress(job_id, 30, "Resolving active speaker crop")
+            metadata = _probe_subclip(subclip_path)
+            plan = resolve_reframe(
+                video_path=str(subclip_path),
+                requested_mode=ReframeMode.AUTO,
+                source_width=metadata.width,
+                source_height=metadata.height,
+                target_width=TARGET_WIDTH,
+                target_height=TARGET_HEIGHT,
             )
-        else:
-            shutil.copyfile(rendered_path, final_path)
+            _raise_if_cancelled(job_id)
 
-        subclip_path.unlink(missing_ok=True)
+            job_manager.update_progress(job_id, 55, "Rendering")
+            # `rendered_path` (the crop+audio master, no subtitles) is kept
+            # permanently from here on -- Subtitle Studio re-derives video.mp4
+            # from it any time the subtitle document changes, without ever
+            # re-cropping or re-transcribing.
+            render_clip(str(subclip_path), plan, str(rendered_path), TARGET_WIDTH, TARGET_HEIGHT)
+            _raise_if_cancelled(job_id)
+
+            subtitle_path: str | None = None
+            subtitle_json_path: str | None = None
+            if include_subtitle:
+                job_manager.update_progress(job_id, 80, "Burning subtitles")
+                subtitle_json_path = str(settings.clip_subtitle_json_path(clip["project_id"], clip_id))
+                subtitle_path = str(clip_dir / "subtitle.ass")
+                _burn_default_subtitles_for_clip(
+                    clip_id, clip["project_id"], clip["start_time"], clip["end_time"], str(rendered_path), subtitle_json_path, subtitle_path, str(final_path)
+                )
+            else:
+                shutil.copyfile(rendered_path, final_path)
+
+            subclip_path.unlink(missing_ok=True)
 
         now = _now()
         with get_connection() as conn:
@@ -333,41 +364,42 @@ def run_render_subtitle_job(job_id: str, clip_id: str) -> None:
         rendered_path = settings.clip_rendered_path(clip["project_id"], clip_id)
         final_path = clip_dir / "video.mp4"
 
-        if not rendered_path.exists():
-            job_manager.update_progress(job_id, 5, "Rebuilding clip (one-time, no video previously saved)")
-            subclip_path = clip_dir / "source_segment.mp4"
-            _raise_if_beyond_last_frame(project, clip)
-            cut_subclip(project["source_video_path"], clip["start_time"], clip["duration"], str(subclip_path))
+        with _render_slot(job_id):
+            if not rendered_path.exists():
+                job_manager.update_progress(job_id, 5, "Rebuilding clip (one-time, no video previously saved)")
+                subclip_path = clip_dir / "source_segment.mp4"
+                _raise_if_beyond_last_frame(project, clip)
+                cut_subclip(project["source_video_path"], clip["start_time"], clip["duration"], str(subclip_path))
+                _raise_if_cancelled(job_id)
+                metadata = _probe_subclip(subclip_path)
+                plan = resolve_reframe(
+                    video_path=str(subclip_path),
+                    requested_mode=ReframeMode.AUTO,
+                    source_width=metadata.width,
+                    source_height=metadata.height,
+                    target_width=TARGET_WIDTH,
+                    target_height=TARGET_HEIGHT,
+                )
+                _raise_if_cancelled(job_id)
+                render_clip(str(subclip_path), plan, str(rendered_path), TARGET_WIDTH, TARGET_HEIGHT)
+                subclip_path.unlink(missing_ok=True)
             _raise_if_cancelled(job_id)
-            metadata = _probe_subclip(subclip_path)
-            plan = resolve_reframe(
-                video_path=str(subclip_path),
-                requested_mode=ReframeMode.AUTO,
-                source_width=metadata.width,
-                source_height=metadata.height,
-                target_width=TARGET_WIDTH,
-                target_height=TARGET_HEIGHT,
-            )
+
+            job_manager.update_progress(job_id, 50, "Loading subtitle document")
+            subtitle_json_path = settings.clip_subtitle_json_path(clip["project_id"], clip_id)
+            if subtitle_json_path.is_file():
+                document = load_document(subtitle_json_path)
+            else:
+                transcript_path = settings.project_analysis_dir(clip["project_id"]) / "transcript.json"
+                words = load_clip_words(transcript_path, clip["start_time"], clip["end_time"])
+                document = build_initial_document(clip_id, words)
+                save_document(subtitle_json_path, document)
             _raise_if_cancelled(job_id)
-            render_clip(str(subclip_path), plan, str(rendered_path), TARGET_WIDTH, TARGET_HEIGHT)
-            subclip_path.unlink(missing_ok=True)
-        _raise_if_cancelled(job_id)
 
-        job_manager.update_progress(job_id, 50, "Loading subtitle document")
-        subtitle_json_path = settings.clip_subtitle_json_path(clip["project_id"], clip_id)
-        if subtitle_json_path.is_file():
-            document = load_document(subtitle_json_path)
-        else:
-            transcript_path = settings.project_analysis_dir(clip["project_id"]) / "transcript.json"
-            words = load_clip_words(transcript_path, clip["start_time"], clip["end_time"])
-            document = build_initial_document(clip_id, words)
-            save_document(subtitle_json_path, document)
-        _raise_if_cancelled(job_id)
-
-        job_manager.update_progress(job_id, 70, "Rendering subtitles")
-        ass_path = clip_dir / "subtitle.ass"
-        ass_path.write_text(render_ass(document), encoding="utf-8")
-        burn_ass_subtitles(str(rendered_path), str(ass_path), str(final_path))
+            job_manager.update_progress(job_id, 70, "Rendering subtitles")
+            ass_path = clip_dir / "subtitle.ass"
+            ass_path.write_text(render_ass(document), encoding="utf-8")
+            burn_ass_subtitles(str(rendered_path), str(ass_path), str(final_path))
 
         now = _now()
         with get_connection() as conn:
