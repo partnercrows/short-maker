@@ -30,6 +30,18 @@ from pydantic import BaseModel
 _RETRY_BACKOFF_SECONDS = [2, 5, 10]
 _RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# When the retries run out, the raw provider payload ("503 UNAVAILABLE
+# {'error': ...}") is what used to reach the user, and it reads like an app
+# bug when the actual fix is almost always "pick a different model". These
+# drive the replacement message: a probe of the same API key to find a model
+# that answers *right now*, named in the error so the fix is one setting away.
+_PROBE_PROMPT = "Reply with OK."
+_PROBE_SYSTEM_PROMPT = "Answer in one word."
+_MAX_MODEL_PROBES = 3
+# Model ids that can't serve a chat completion at all, so probing them would
+# only burn time on a guaranteed failure.
+_NON_CHAT_MODEL_MARKERS = ("image", "tts", "audio", "embed", "veo", "lyria", "imagen", "banana", "research", "guard")
+
 OPENAI_COMPATIBLE_DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "deepseek": "https://api.deepseek.com/v1",
@@ -38,6 +50,15 @@ OPENAI_COMPATIBLE_DEFAULT_BASE_URLS = {
     "xai": "https://api.x.ai/v1",
     "mistral": "https://api.mistral.ai/v1",
 }
+
+
+class ProviderUnavailableError(RuntimeError):
+    """The chosen model kept failing with a transient error (overload / rate
+    limit) until the retries ran out.
+
+    Separate from the provider's own exception so the message that reaches
+    the job row says what the user can do about it, instead of quoting the
+    vendor's JSON at them."""
 
 
 class ProviderType(StrEnum):
@@ -146,9 +167,112 @@ def complete_chat(config: ProviderConfig, system_prompt: str, user_prompt: str) 
                 return _complete_chat_gemini(config, system_prompt, user_prompt)
             return _complete_chat_openai_compatible(config, system_prompt, user_prompt)
         except Exception as exc:  # noqa: BLE001 -- re-raised immediately unless retryable
-            if not _is_retryable(exc) or attempt == len(_RETRY_BACKOFF_SECONDS):
+            if not _is_retryable(exc):
                 raise
+            if attempt == len(_RETRY_BACKOFF_SECONDS):
+                raise ProviderUnavailableError(_unavailable_message(config, exc)) from exc
     raise AssertionError("unreachable")  # the loop above always returns or raises
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    if isinstance(exc, genai_errors.ClientError) and exc.code == 429:
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
+
+
+def _unavailable_message(config: ProviderConfig, exc: Exception) -> str:
+    attempts = 1 + len(_RETRY_BACKOFF_SECONDS)
+    cause = (
+        "has no quota left for your API key right now"
+        if _is_rate_limit(exc)
+        else "is overloaded on the provider's side"
+    )
+    message = (
+        f'The AI model "{config.model}" {cause} -- it failed {attempts} times in a row. '
+        "This is not a problem with your video or your API key."
+    )
+    alternative = _find_answering_model(config)
+    if alternative:
+        return (
+            f'{message} "{alternative}" answered fine with the same API key just now: '
+            "switch to it under Settings > AI Model, then run Analyze again."
+        )
+    return f"{message} Try again in a few minutes, or pick a different model under Settings > AI Model."
+
+
+def _find_answering_model(config: ProviderConfig) -> str | None:
+    """Probes the provider for a model that responds *now*, so the error can
+    name a way out rather than just a failure.
+
+    Deliberately best-effort and bounded (a handful of one-word requests):
+    this runs on a path that has already failed, and must never turn a bad
+    error message into a worse hang or a second exception."""
+    try:
+        candidates = _probe_candidates(config)
+        for model in candidates[:_MAX_MODEL_PROBES]:
+            probe = config.model_copy(update={"model": model})
+            try:
+                if _complete_once(probe, _PROBE_SYSTEM_PROMPT, _PROBE_PROMPT).strip():
+                    return model
+            except Exception:  # noqa: BLE001 -- this model is out too; try the next
+                continue
+    except Exception:  # noqa: BLE001 -- listing failed; the message just omits the suggestion
+        return None
+    return None
+
+
+def _probe_candidates(config: ProviderConfig) -> list[str]:
+    """Models worth probing, best first.
+
+    Chat-capable only, never the model that just failed, and ordered to try
+    the ones most likely to have spare capacity: plain "flash"-class models
+    before lite/preview variants, and "pro" last -- on a free tier that's the
+    one most likely to be rate-limited even when it is up."""
+    creds = ProviderCredentials(provider_type=config.provider_type, api_key=config.api_key, base_url=config.base_url)
+    model_ids = [m for m in _list_model_ids(creds) if m != config.model]
+    usable = [m for m in model_ids if not any(marker in m.lower() for marker in _NON_CHAT_MODEL_MARKERS)]
+    return sorted(usable, key=_probe_rank)
+
+
+def _probe_rank(model_id: str) -> tuple[int, int, int, str]:
+    name = model_id.lower()
+    return (
+        0 if "flash" in name else 1,
+        1 if ("lite" in name or "preview" in name) else 0,
+        1 if "pro" in name else 0,
+        name,
+    )
+
+
+def _list_model_ids(creds: ProviderCredentials) -> list[str]:
+    """Sync sibling of `list_models` -- `complete_chat` and everything below
+    it is called from job threads, so this path must not need an event loop."""
+    if creds.provider_type == ProviderType.GEMINI:
+        client = genai.Client(api_key=creds.api_key)
+        ids = []
+        for model in client.models.list():
+            actions = getattr(model, "supported_actions", None) or []
+            if actions and "generateContent" not in actions:
+                continue
+            model_id = (model.name or "").removeprefix("models/")
+            if model_id:
+                ids.append(model_id)
+        return ids
+
+    base_url = creds.base_url or OPENAI_COMPATIBLE_DEFAULT_BASE_URLS.get(creds.provider_type.value)
+    if not base_url:
+        return []
+    response = httpx.get(f"{base_url.rstrip('/')}/models", headers={"Authorization": f"Bearer {creds.api_key}"}, timeout=15.0)
+    response.raise_for_status()
+    return [item["id"] for item in response.json().get("data", []) if item.get("id")]
+
+
+def _complete_once(config: ProviderConfig, system_prompt: str, user_prompt: str) -> str:
+    """One attempt, no retries -- used by the probe, which is measuring
+    whether a model answers at all, not trying to make it answer."""
+    if config.provider_type == ProviderType.GEMINI:
+        return _complete_chat_gemini(config, system_prompt, user_prompt)
+    return _complete_chat_openai_compatible(config, system_prompt, user_prompt)
 
 
 def _complete_chat_gemini(config: ProviderConfig, system_prompt: str, user_prompt: str) -> str:

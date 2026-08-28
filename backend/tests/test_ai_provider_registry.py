@@ -5,7 +5,7 @@ import pytest
 from google.genai import errors as genai_errors
 
 from app.ai_providers import registry
-from app.ai_providers.registry import ProviderConfig, ProviderType, complete_chat
+from app.ai_providers.registry import ProviderConfig, ProviderType, ProviderUnavailableError, complete_chat
 
 _GEMINI_CONFIG = ProviderConfig(provider_type=ProviderType.GEMINI, model="fake-model", api_key="fake")
 _OPENAI_CONFIG = ProviderConfig(provider_type=ProviderType.OPENAI, model="fake-model", api_key="fake")
@@ -78,9 +78,60 @@ def test_complete_chat_raises_after_exhausting_retries(monkeypatch):
         raise _server_error()
 
     monkeypatch.setattr(registry, "_complete_chat_gemini", fake)
-    with pytest.raises(genai_errors.ServerError):
+    monkeypatch.setattr(registry, "_find_answering_model", lambda config: None)
+    with pytest.raises(ProviderUnavailableError) as exc_info:
         complete_chat(_GEMINI_CONFIG, "sys", "user")
     assert calls["n"] == 1 + len(registry._RETRY_BACKOFF_SECONDS)
+    assert "overloaded" in str(exc_info.value)
+    assert "Settings > AI Model" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, genai_errors.ServerError)
+
+
+def test_exhausted_retries_name_a_model_that_answered_the_probe(monkeypatch):
+    monkeypatch.setattr(registry, "_complete_chat_gemini", lambda *a, **k: (_ for _ in ()).throw(_server_error()))
+    monkeypatch.setattr(registry, "_list_model_ids", lambda creds: ["gemini-pro-latest", "gemini-3.5-flash"])
+
+    probed = []
+
+    def fake_probe(config, system_prompt, user_prompt):
+        probed.append(config.model)
+        if config.model != "gemini-3.5-flash":
+            raise _server_error()
+        return "OK"
+
+    monkeypatch.setattr(registry, "_complete_once", fake_probe)
+
+    with pytest.raises(ProviderUnavailableError) as exc_info:
+        complete_chat(_GEMINI_CONFIG, "sys", "user")
+
+    assert probed[0] == "gemini-3.5-flash"  # flash-class probed before pro
+    assert '"gemini-3.5-flash" answered fine' in str(exc_info.value)
+
+
+def test_rate_limit_exhaustion_says_quota_rather_than_overload(monkeypatch):
+    monkeypatch.setattr(
+        registry, "_complete_chat_gemini", lambda *a, **k: (_ for _ in ()).throw(_client_error(429, "RESOURCE_EXHAUSTED"))
+    )
+    monkeypatch.setattr(registry, "_find_answering_model", lambda config: None)
+
+    with pytest.raises(ProviderUnavailableError) as exc_info:
+        complete_chat(_GEMINI_CONFIG, "sys", "user")
+    assert "no quota left" in str(exc_info.value)
+
+
+def test_probe_skips_the_failing_model_and_non_chat_models(monkeypatch):
+    monkeypatch.setattr(
+        registry, "_list_model_ids", lambda creds: ["fake-model", "gemini-2.5-flash-image", "veo-3", "gemini-3.5-flash"]
+    )
+    assert registry._probe_candidates(_GEMINI_CONFIG) == ["gemini-3.5-flash"]
+
+
+def test_find_answering_model_returns_none_when_listing_fails(monkeypatch):
+    def boom(creds):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(registry, "_list_model_ids", boom)
+    assert registry._find_answering_model(_GEMINI_CONFIG) is None
 
 
 def test_complete_chat_retries_openai_compatible_503(monkeypatch):
