@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 // The webview loads over https://tauri.localhost in a packaged build, and
@@ -39,9 +40,22 @@ export async function waitForBackendReady(
       // Not listening yet -- keep polling.
     }
     if (Date.now() - start > timeoutMs) {
-      throw new Error("The backend didn't start in time. Try restarting the app.");
+      throw new Error(`The backend didn't start in time. Try restarting the app.${await backendFailureDetail()}`);
     }
     await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
+// The Rust side keeps the tail of whatever the backend printed before it
+// died. A timeout on its own says nothing -- the reason (a full disk
+// stopping the sidecar from unpacking, a port already taken) is in there.
+async function backendFailureDetail(): Promise<string> {
+  try {
+    const lines = await invoke<string[]>("backend_stderr");
+    if (lines.length === 0) return "";
+    return ["", "", "The backend said:", ...lines.slice(-4)].join("\n");
+  } catch {
+    return "";
   }
 }
 
