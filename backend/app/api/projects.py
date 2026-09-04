@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -30,6 +31,15 @@ def create_project(payload: ProjectCreate) -> Project:
     if not Path(payload.source_video_path).is_file():
         raise HTTPException(status_code=400, detail=f"Video file not found: {payload.source_video_path}")
 
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Project name cannot be empty.")
+    # Checked before the copy, not after: copying the source is the slow part
+    # (seconds to minutes for a large video), and there's no reason to spend
+    # that time -- or the gigabyte of disk it takes -- on a project that is
+    # about to be rejected.
+    _raise_if_name_taken(name)
+
     project_id = str(uuid.uuid4())
     now = _now()
     settings = get_settings()
@@ -43,16 +53,38 @@ def create_project(payload: ProjectCreate) -> Project:
 
     metadata = probe_metadata(str(dest_path))
 
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO projects (id, name, source_video_path, source_duration, source_resolution, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
-            """,
-            (project_id, payload.name, str(dest_path), metadata.duration, f"{metadata.width}x{metadata.height}", now, now),
-        )
-        conn.commit()
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO projects (id, name, source_video_path, source_duration, source_resolution, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+                """,
+                (project_id, name, str(dest_path), metadata.duration, f"{metadata.width}x{metadata.height}", now, now),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError as exc:
+        # Two requests for the same name that both passed the check above
+        # before either inserted -- the unique index is what actually decides
+        # it. Take the copied video back down with the losing request, or the
+        # rejection would still cost the user a gigabyte.
+        delete_directory(settings.project_dir(project_id))
+        raise HTTPException(status_code=409, detail=_name_taken_detail(name)) from exc
     return get_project(project_id)
+
+
+def _raise_if_name_taken(name: str) -> None:
+    with get_connection() as conn:
+        existing = conn.execute("SELECT id FROM projects WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+    if existing:
+        raise HTTPException(status_code=409, detail=_name_taken_detail(name))
+
+
+def _name_taken_detail(name: str) -> str:
+    return (
+        f'A project named "{name}" already exists. Open it from History to see its clips, '
+        "or pick a different name for this one."
+    )
 
 
 @router.get("", response_model=list[Project])

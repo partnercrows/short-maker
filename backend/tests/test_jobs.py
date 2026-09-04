@@ -7,8 +7,8 @@ def _make_project(project_id: str) -> None:
     with get_connection() as conn:
         conn.execute(
             "INSERT INTO projects (id, name, source_video_path, status, created_at, updated_at) "
-            "VALUES (?, 'p', 'v.mp4', 'queued', 'now', 'now')",
-            (project_id,),
+            "VALUES (?, ?, 'v.mp4', 'queued', 'now', 'now')",
+            (project_id, project_id),  # project names are unique now, so reuse the id
         )
         conn.commit()
 

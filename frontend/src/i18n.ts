@@ -47,6 +47,12 @@ const dict = {
   analyzing: { id: "Menganalisa...", en: "Analyzing..." },
   generating: { id: "Membuat klip...", en: "Generating clip..." },
 
+  creating_project: { id: "Menyalin video...", en: "Copying video..." },
+  clips_empty: {
+    id: "Belum ada klip untuk proyek ini. Kembali ke langkah Analisa untuk membuatnya.",
+    en: "No clips for this project yet. Go back to the Analyze step to create them.",
+  },
+
   generate: { id: "Generate", en: "Generate" },
   include_subtitle: { id: "Sertakan subtitle", en: "Include subtitles" },
   status_label: { id: "status", en: "status" },

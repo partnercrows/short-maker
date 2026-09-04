@@ -18,6 +18,14 @@ def init_db() -> None:
             except sqlite3.OperationalError as exc:
                 if "duplicate column name" not in str(exc):
                     raise
+            except sqlite3.IntegrityError:
+                # A uniqueness migration against data that already violates it
+                # -- exactly the duplicate projects the index is meant to
+                # prevent, on a database created before it existed. Skip the
+                # index rather than refusing to start: the API rejects
+                # duplicate names either way, and the index is created on the
+                # first start after the user removes the leftover duplicate.
+                continue
         conn.commit()
 
 

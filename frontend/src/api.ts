@@ -80,8 +80,7 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs = D
       },
     });
     if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`${res.status} ${res.statusText}: ${body}`);
+      throw new Error(await errorMessage(res));
     }
     if (res.status === 204) return undefined as T;
     return res.json();
@@ -93,6 +92,21 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs = D
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// FastAPI reports failures as {"detail": "..."}, and that detail is written
+// to be read by the user (which model to switch to, which name is taken).
+// Showing it raw -- `409 Conflict: {"detail":"..."}` -- buried the sentence
+// that actually says what to do.
+async function errorMessage(res: Response): Promise<string> {
+  const body = await res.text();
+  try {
+    const detail = JSON.parse(body)?.detail;
+    if (typeof detail === "string" && detail.trim() !== "") return detail;
+  } catch {
+    // Not JSON -- fall through to the raw body.
+  }
+  return `${res.status} ${res.statusText}: ${body}`;
 }
 
 export interface Project {

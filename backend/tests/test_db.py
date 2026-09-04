@@ -24,3 +24,29 @@ def test_init_db_migration_adds_subtitle_and_intro_columns():
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(clips)").fetchall()}
     assert "subtitle_json_path" in columns
     assert "intro_json_path" in columns
+
+
+def test_init_db_is_idempotent_including_the_unique_name_index():
+    init_db()
+    init_db()  # must not raise on the second run
+
+
+def test_init_db_survives_a_database_that_already_has_duplicate_project_names():
+    """The index exists to prevent duplicates, but a database made before it
+    can already contain them -- refusing to start would strand the user with
+    an app that won't open."""
+    init_db()
+    with get_connection() as conn:
+        conn.execute("DROP INDEX IF EXISTS idx_projects_name_unique")
+        for project_id in ("dup-a", "dup-b"):
+            conn.execute(
+                "INSERT INTO projects (id, name, source_video_path, status, created_at, updated_at) "
+                "VALUES (?, 'same name', 'v.mp4', 'queued', 'now', 'now')",
+                (project_id,),
+            )
+        conn.commit()
+
+    init_db()  # must not raise
+
+    with get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM projects").fetchone()["c"] == 2

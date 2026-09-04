@@ -113,6 +113,14 @@ export default function AiClipperView({ settings, onSettingsChange, openProject 
   const [clipCountOption, setClipCountOption] = useState<(typeof CLIP_COUNT_OPTIONS)[number]>("auto");
 
   const [project, setProject] = useState<Project | null>(null);
+  // Creating a project copies the whole source video into project storage,
+  // which takes seconds for a large file with nothing on screen to show for
+  // it. Without this guard a second, impatient click created a second
+  // project -- another full copy of the video, and a duplicate that the rest
+  // of the flow then had to pick between (it picked wrong: analysis ran on
+  // one, the clip list showed the other, which looked like the clips had
+  // vanished).
+  const [creatingProject, setCreatingProject] = useState(false);
   const [analyzeJob, setAnalyzeJob] = useState<Job | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [clips, setClips] = useState<Clip[]>([]);
@@ -191,12 +199,16 @@ export default function AiClipperView({ settings, onSettingsChange, openProject 
       setStep(2);
       return;
     }
+    if (creatingProject) return;
+    setCreatingProject(true);
     try {
       const p = await createProject(name, videoPath);
       setProject(p);
       setStep(2);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setCreatingProject(false);
     }
   }
 
@@ -301,10 +313,10 @@ export default function AiClipperView({ settings, onSettingsChange, openProject 
           <div className="flex justify-end gap-2 pt-2">
             <button
               className="rounded bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={!step1Valid}
+              disabled={!step1Valid || creatingProject}
               onClick={handleNextFromProjectStep}
             >
-              {t(lang, "next")}
+              {creatingProject ? t(lang, "creating_project") : t(lang, "next")}
             </button>
           </div>
         </div>
@@ -421,6 +433,8 @@ export default function AiClipperView({ settings, onSettingsChange, openProject 
               {t(lang, "back")}
             </button>
           </div>
+
+          {clips.length === 0 && <p className="text-sm text-neutral-500">{t(lang, "clips_empty")}</p>}
 
           {clips.map((clip) => (
             <ClipResultCard

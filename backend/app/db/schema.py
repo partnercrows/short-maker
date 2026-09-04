@@ -103,4 +103,12 @@ SCHEMA_STATEMENTS = [
 MIGRATIONS = [
     "ALTER TABLE clips ADD COLUMN subtitle_json_path TEXT",
     "ALTER TABLE clips ADD COLUMN intro_json_path TEXT",
+    # Project names are the only handle the user has on a project in History,
+    # so two projects sharing one is genuinely ambiguous -- and the way it
+    # happened in practice (a second click while the source video was still
+    # being copied) left a duplicate that analysis never touched, so its
+    # Clips step sat empty while the real clips were on the other one. The
+    # API rejects a taken name up front; this index is what settles two
+    # requests that raced past that check.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name_unique ON projects(name COLLATE NOCASE)",
 ]
