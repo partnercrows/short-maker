@@ -25,7 +25,7 @@ import numpy as np
 from app.pipeline.common.face_detector import FaceBox, YuNetFaceDetector
 from app.pipeline.reframe.center_crop import target_crop_size
 from app.pipeline.reframe.models import CropWindow, ReframeMode, ReframePlan
-from app.pipeline.reframe.smoothing import segment_hold_and_pan, smooth_positions
+from app.pipeline.reframe.smoothing import segment_hold_and_pan
 from pydantic import BaseModel
 
 FACELESS_STRIDE = 3
@@ -43,6 +43,21 @@ FACE_PENALTY = 1.5
 CENTER_BIAS = 0.2
 POSITION_STEP = 16
 MOTION_THRESHOLD = 12
+
+# Camera discipline (PRD S16: smooth, never shaky).
+#
+# Cooking footage moves constantly -- a hand crosses the frame, a spoon comes
+# back, steam drifts -- and a crop that answers each of those reads as a
+# nervous operator and makes the result genuinely unpleasant to watch. So the
+# camera is deliberately lazy: it looks at where the work is over more than a
+# second at a time, and only relocates when the action has clearly moved a
+# long way and stayed there.
+CAMERA_BUCKET_SECONDS = 1.2  # motion is judged over this long, not per frame
+MOVE_TRIGGER_FRACTION = 0.18  # how far the action must move to be worth following
+MIN_HOLD_SECONDS = 2.0  # ...and for how long, before the camera commits
+MIN_SCENE_SECONDS_FOR_PAN = 5.0  # a short scene gets one framing, full stop
+PAN_DURATION_SECONDS = 0.8
+PAN_STEPS = 10
 
 
 class FacelessSample(BaseModel):
@@ -188,19 +203,32 @@ def build_plan(
         return ReframePlan(mode_used=ReframeMode.FACELESS_COOKING, windows=windows)
 
     times = [sample.time for sample in scan_result.samples] or [0.0]
-    smooth_x = smooth_positions([float(x) for x, _ in positions], ema_alpha=0.12, deadband_px=0.06 * source_width)
-    smooth_y = smooth_positions([float(y) for _, y in positions], ema_alpha=0.12, deadband_px=0.06 * source_height)
+    track_x = _camera_track(times, [float(x) for x, _ in positions], source_width)
+    track_y = _camera_track(times, [float(y) for _, y in positions], source_height)
 
-    windows = [
-        CropWindow(
-            time=time,
-            x=_clamp(int(round(x)), 0, source_width - crop_width),
-            y=_clamp(int(round(y)), 0, source_height - crop_height),
-            width=crop_width,
-            height=crop_height,
-        )
-        for time, x, y in zip(times, _hold_and_pan(times, smooth_x), _hold_and_pan(times, smooth_y))
-    ]
+    # If neither axis ever committed to a move, say so with a single window
+    # rather than hundreds of identical ones.
+    if len(set(track_x)) == 1 and len(set(track_y)) == 1:
+        windows = [
+            CropWindow(
+                time=0.0,
+                x=_clamp(int(round(track_x[0])), 0, source_width - crop_width),
+                y=_clamp(int(round(track_y[0])), 0, source_height - crop_height),
+                width=crop_width,
+                height=crop_height,
+            )
+        ]
+    else:
+        windows = [
+            CropWindow(
+                time=time,
+                x=_clamp(int(round(x)), 0, source_width - crop_width),
+                y=_clamp(int(round(y)), 0, source_height - crop_height),
+                width=crop_width,
+                height=crop_height,
+            )
+            for time, x, y in zip(times, track_x, track_y)
+        ]
 
     # render._interpolated_window takes width/height from the earlier keyframe
     # and only interpolates x/y, so a plan must never change crop size midway.
@@ -326,35 +354,96 @@ def _face_overlap(faces: list[FaceBox], x: int, y: int, crop_width: int, crop_he
     return worst
 
 
-def _hold_and_pan(times: list[float], values: list[float]) -> list[float]:
-    """Turn a continuous position series into holds joined by eased pans, so
-    the camera reads as deliberate rather than nervous (PRD S16)."""
+def _camera_track(times: list[float], values: list[float], dimension: int) -> list[float]:
+    """One axis of camera movement: mostly a held position, occasionally a
+    slow pan to somewhere the action has actually moved to.
+
+    The earlier version smoothed the per-sample best position and let any
+    sustained-looking wobble become a pan. In real cooking footage that meant
+    the frame drifted left and right continuously, which is dizzying to watch
+    even though every individual step was small. Two things fix it: judge
+    position over more than a second at a time, so a hand reaching across and
+    back cancels out; and require a real distance *and* a real dwell before
+    the camera agrees to move at all.
+    """
     if len(values) < 2:
-        return values
-    spread = max(values) - min(values)
-    if spread < 1.0:
-        return values
+        return list(values)
 
-    tolerance = 0.08 * spread
-    runs: list[tuple[float, float, float]] = []
-    run_start = times[0]
-    run_values = [values[0]]
-    for time, value in zip(times[1:], values[1:]):
-        median = float(np.median(run_values))
-        if abs(value - median) <= tolerance:
-            run_values.append(value)
-            continue
-        runs.append((run_start, time, median))
-        run_start = time
-        run_values = [value]
-    runs.append((run_start, times[-1], float(np.median(run_values))))
+    scene_duration = times[-1] - times[0]
+    if scene_duration < MIN_SCENE_SECONDS_FOR_PAN:
+        # Most recipe scenes are a few seconds long. Moving the camera inside
+        # one of those is never worth it.
+        return [float(np.median(values))] * len(values)
 
-    keyframes = segment_hold_and_pan(runs, pan_duration=0.6, pan_steps=8)
+    buckets = _bucket_positions(times, values)
+    trigger = MOVE_TRIGGER_FRACTION * dimension
+    holds = _committed_holds(buckets, trigger)
+
+    if len(holds) == 1:
+        return [holds[0][1]] * len(values)
+
+    segments: list[tuple[float, float, float]] = []
+    for (start, position), (next_start, _) in zip(holds, holds[1:]):
+        segments.append((start, next_start, position))
+    segments.append((holds[-1][0], times[-1], holds[-1][1]))
+
+    keyframes = segment_hold_and_pan(segments, pan_duration=PAN_DURATION_SECONDS, pan_steps=PAN_STEPS)
     if not keyframes:
-        return values
+        return [holds[0][1]] * len(values)
     keyframe_times = [time for time, _ in keyframes]
     keyframe_values = [value for _, value in keyframes]
     return list(np.interp(times, keyframe_times, keyframe_values))
+
+
+def _bucket_positions(times: list[float], values: list[float]) -> list[tuple[float, float]]:
+    """Median position per ~1.2s bucket: the frame-to-frame argmax is far too
+    jumpy to steer a camera with."""
+    buckets: list[tuple[float, float]] = []
+    bucket_start = times[0]
+    current: list[float] = []
+    for time, value in zip(times, values):
+        if time - bucket_start >= CAMERA_BUCKET_SECONDS and current:
+            buckets.append((bucket_start, float(np.median(current))))
+            bucket_start = time
+            current = []
+        current.append(value)
+    if current:
+        buckets.append((bucket_start, float(np.median(current))))
+    return buckets
+
+
+def _committed_holds(buckets: list[tuple[float, float]], trigger: float) -> list[tuple[float, float]]:
+    """Where the camera sits, and from when.
+
+    A candidate position has to stay `trigger` away from the current framing
+    for `MIN_HOLD_SECONDS` before the camera follows it -- so a hand that
+    crosses the frame and comes back never moves the camera, while a cook who
+    genuinely relocates to the stove does.
+    """
+    if not buckets:
+        return [(0.0, 0.0)]
+
+    holds = [(buckets[0][0], buckets[0][1])]
+    current = buckets[0][1]
+    pending_since: float | None = None
+    pending_values: list[float] = []
+
+    for time, position in buckets[1:]:
+        if abs(position - current) < trigger:
+            pending_since = None
+            pending_values = []
+            continue
+        if pending_since is None:
+            pending_since = time
+            pending_values = [position]
+            continue
+        pending_values.append(position)
+        if time - pending_since >= MIN_HOLD_SECONDS:
+            current = float(np.median(pending_values))
+            holds.append((pending_since, current))
+            pending_since = None
+            pending_values = []
+    return holds
 
 
 def _clamp(value: int, low: int, high: int) -> int:

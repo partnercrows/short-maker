@@ -158,3 +158,64 @@ def test_center_fallback_is_a_single_centred_window():
 
     assert plan.mode_used is ReframeMode.CENTER_CROP
     assert len(plan.windows) == 1
+
+
+# --- camera discipline (PRD S16) --------------------------------------------
+
+
+def _moving_scan(columns: list[int], fps: float = 10.0) -> FacelessScan:
+    """A scan whose action sits in `columns[i]` at each sampled moment."""
+    return _scan([_sample(i / fps, hot_column=column) for i, column in enumerate(columns)])
+
+
+def _x_positions(plan) -> list[int]:
+    return [window.x for window in plan.windows]
+
+
+def test_action_wobbling_side_to_side_does_not_move_the_camera():
+    """The complaint that started this: hands crossing the frame and coming
+    back made the crop drift left and right continuously, which is dizzying
+    to watch even though each step was small."""
+    # 12 seconds of it -- long past the point where the camera is allowed to
+    # move at all, so this exercises the dwell rule rather than the
+    # short-scene shortcut.
+    wobble = ([4] * 5 + [44] * 5) * 12
+    plan = faceless_reframe.build_plan(_moving_scan(wobble), TARGET_WIDTH, TARGET_HEIGHT)
+
+    assert len(set(_x_positions(plan))) == 1  # one framing, held throughout
+
+
+def test_a_short_scene_gets_one_framing_whatever_happens_in_it():
+    """Most recipe scenes are a few seconds; moving inside one is never worth it."""
+    plan = faceless_reframe.build_plan(_moving_scan([2, 8, 20, 34, 44]), TARGET_WIDTH, TARGET_HEIGHT)
+
+    assert len(set(_x_positions(plan))) == 1
+
+
+def test_the_camera_does_follow_action_that_genuinely_relocates():
+    """Cook moves from the board on the left to the stove on the right and
+    stays there -- that is worth following."""
+    columns = [3] * 60 + [44] * 60  # 6s left, then 6s right, at 10 samples/s
+    plan = faceless_reframe.build_plan(_moving_scan(columns), TARGET_WIDTH, TARGET_HEIGHT)
+
+    xs = _x_positions(plan)
+    assert len(set(xs)) > 1, "a real relocation should be followed"
+    assert xs[-1] > xs[0], "and followed in the right direction"
+
+
+def test_a_pan_never_doubles_back():
+    """One deliberate move, not a search."""
+    columns = [3] * 60 + [44] * 60
+    xs = _x_positions(faceless_reframe.build_plan(_moving_scan(columns), TARGET_WIDTH, TARGET_HEIGHT))
+
+    deltas = [b - a for a, b in zip(xs, xs[1:]) if b != a]
+    assert deltas, "expected some movement"
+    assert all(delta > 0 for delta in deltas), "the camera reversed direction mid-pan"
+
+
+def test_a_single_brief_excursion_is_ignored():
+    """A pan that lasts less than the dwell time is a distraction, not a move."""
+    columns = [3] * 40 + [44] * 8 + [3] * 60  # away for 0.8s, then back
+    plan = faceless_reframe.build_plan(_moving_scan(columns), TARGET_WIDTH, TARGET_HEIGHT)
+
+    assert len(set(_x_positions(plan))) == 1
