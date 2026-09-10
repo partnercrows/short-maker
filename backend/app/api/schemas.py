@@ -21,6 +21,10 @@ class ProjectCreate(BaseModel):
     source_video_path: str
     source_duration: float | None = None
     source_resolution: str | None = None
+    # Which flow this project belongs to: "ai_clipper" (many short clips from
+    # hot moments) or "recipe" (one condensed cooking video). Everything about
+    # creating the project is identical either way.
+    mode: str = "ai_clipper"
 
 
 class Project(BaseModel):
@@ -32,6 +36,7 @@ class Project(BaseModel):
     status: str
     created_at: str
     updated_at: str
+    mode: str = "ai_clipper"
     # Measured from disk on read (not persisted): what this project's folder
     # currently occupies, so the UI can say what deleting it frees.
     storage_bytes: int = 0
@@ -73,6 +78,9 @@ class SocialKit(BaseModel):
     hashtags: str | None
     thumbnail_idea: str | None
     thumbnail_prompt: str | None
+    # Recipe Clipper only: CTA, alternative hooks and thumbnail text, which
+    # the shared columns have no place for.
+    extra_json: str | None = None
     created_at: str
     updated_at: str
 

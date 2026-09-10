@@ -21,6 +21,8 @@ class JobType(StrEnum):
     DOWNLOAD_GPU_PACK = "download_gpu_pack"
     EXPORT_CLIP = "export_clip"
     DOWNLOAD_YOUTUBE_VIDEO = "download_youtube_video"
+    ANALYZE_RECIPE = "analyze_recipe"
+    GENERATE_RECIPE_VIDEO = "generate_recipe_video"
 
 
 class Job(BaseModel):

@@ -63,6 +63,30 @@ class Settings:
     def clip_intro_image_path(self, project_id: str, clip_id: str) -> Path:
         return self.clip_dir(project_id, clip_id) / "intro.png"
 
+    # --- Recipe Clipper -------------------------------------------------
+    # The recipe video is a clip like any other, so it reuses clip_dir and
+    # inherits storage accounting and deletion for free. Analysis artefacts
+    # sit beside the transcript because they describe the *source*, and
+    # survive re-analysis at a different target duration.
+
+    def project_recipe_dir(self, project_id: str) -> Path:
+        return self.project_analysis_dir(project_id) / "recipe"
+
+    def recipe_frames_dir(self, project_id: str) -> Path:
+        return self.project_recipe_dir(project_id) / "frames"
+
+    def recipe_labels_path(self, project_id: str) -> Path:
+        return self.project_recipe_dir(project_id) / "vision_labels.json"
+
+    def recipe_analysis_path(self, project_id: str) -> Path:
+        return self.project_recipe_dir(project_id) / "recipe_analysis.json"
+
+    def recipe_frame_index_path(self, project_id: str) -> Path:
+        return self.project_recipe_dir(project_id) / "frames_index.json"
+
+    def recipe_scene_dir(self, project_id: str, clip_id: str, scene_id: str) -> Path:
+        return self.clip_dir(project_id, clip_id) / "scenes" / scene_id
+
 
 @lru_cache
 def get_settings() -> Settings:

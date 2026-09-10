@@ -27,6 +27,10 @@ from app.db.connection import get_connection
 from app.jobs.manager import job_manager
 from app.pipeline.ai_analysis.clip_selector import select_clips
 from app.pipeline.intro import load_intro_frame
+from app.pipeline.recipe import assemble as recipe_assemble
+from app.pipeline.recipe import face_check, frame_sampler, recipe_analyzer, store, vision_capability, vision_labeler
+from app.pipeline.recipe.models import AudioMode, RecipeAnalysis, TargetDuration
+from app.pipeline.recipe.vision_capability import VisionUnsupportedError
 from app.pipeline.reframe.models import ReframeMode
 from app.pipeline.reframe.modes import resolve as resolve_reframe
 from app.pipeline.render import render as render_clip
@@ -504,6 +508,261 @@ def run_download_youtube_job(
         # in current_step (left untouched by complete()) so the frontend has
         # something to show beyond "100%, Done".
         job_manager.update_progress(job_id, 100, f"Saved as {final_path.name}")
+        job_manager.complete(job_id)
+    except JobCancelled:
+        return
+    except Exception as exc:  # noqa: BLE001 -- reported through the job row
+        job_manager.fail(job_id, str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Recipe Clipper (PRD docs/RECIPE_CLIPER.md)
+# ---------------------------------------------------------------------------
+
+
+def run_recipe_analyze_job(
+    job_id: str,
+    project_id: str,
+    provider: ProviderConfig,
+    target_duration: str = "auto",
+    faceless: bool = True,
+    use_gpu: bool = False,
+) -> None:
+    """Understand the cooking video and build a timeline from it.
+
+    Deliberately stops before rendering: the user reviews and edits the
+    timeline first (PRD S18), and rendering is a separate job so an edit
+    never re-spends the AI budget.
+    """
+    settings = get_settings()
+    try:
+        job_manager.start(job_id)
+        with get_connection() as conn:
+            project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if project is None:
+            raise ValueError(f"Project not found: {project_id}")
+
+        source_video = project["source_video_path"]
+        target = TargetDuration(target_duration)
+        video_duration = _usable_video_duration(source_video, project["source_duration"])
+
+        transcript = _recipe_transcript(job_id, project_id, source_video, video_duration, use_gpu)
+        _raise_if_cancelled(job_id)
+
+        job_manager.update_progress(job_id, 32, "Detecting cooking steps")
+        frames_dir = settings.recipe_frames_dir(project_id)
+        probe_frames, interval = frame_sampler.extract_probe_frames(source_video, frames_dir, video_duration)
+        segments = frame_sampler.segment_shots(probe_frames, interval)
+        frame_sampler.save_frame_index(settings.recipe_frame_index_path(project_id), segments, interval)
+        keyframes = frame_sampler.select_keyframes(segments, video_duration)
+        _raise_if_cancelled(job_id)
+
+        labels, degraded_warning = _label_keyframes(job_id, project_id, provider, keyframes, transcript)
+        _raise_if_cancelled(job_id)
+
+        if not labels and (transcript is None or not transcript.text.strip()):
+            raise ValueError(
+                "This video has no usable speech, and the selected AI model cannot read images, so there is "
+                "nothing to analyze. Switch to a vision-capable model under Settings > AI Model and try again."
+            )
+
+        job_manager.update_progress(job_id, 74, "Finding important scenes")
+        analysis = recipe_analyzer.analyze_recipe(
+            provider,
+            labels,
+            transcript,
+            target,
+            segments,
+            video_duration,
+            faceless=faceless,
+        )
+        if degraded_warning:
+            analysis.visual_analysis = "unavailable"
+            analysis.warnings.insert(0, degraded_warning)
+        if not analysis.scenes:
+            raise ValueError(
+                "No cooking steps could be identified in this video. If this is not a cooking video, "
+                "AI Clipper is the menu you want."
+            )
+        recipe_analyzer.save_analysis(settings.recipe_analysis_path(project_id), analysis)
+        _raise_if_cancelled(job_id)
+
+        job_manager.update_progress(job_id, 82, "Building recipe timeline")
+        clip_id = store.ensure_recipe_clip(project_id, analysis.model_dump_json())
+        store.replace_scenes(clip_id, analysis.scenes)
+
+        _prepare_scene_framing(job_id, project_id, clip_id, source_video, analysis, faceless)
+
+        job_manager.update_progress(job_id, 100, "Done")
+        job_manager.complete(job_id)
+    except JobCancelled:
+        return
+    except Exception as exc:  # noqa: BLE001 -- reported through the job row
+        job_manager.fail(job_id, str(exc))
+
+
+def _recipe_transcript(job_id, project_id, source_video, video_duration, use_gpu):
+    """The same transcript AI Clipper builds, cached in the same place -- a
+    project analysed by both flows only ever transcribes once."""
+    settings = get_settings()
+    analysis_dir = settings.project_analysis_dir(project_id)
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    transcript_path = analysis_dir / "transcript.json"
+
+    if transcript_path.is_file():
+        job_manager.update_progress(job_id, 28, "Reusing existing transcript")
+        return TranscriptResult.model_validate_json(transcript_path.read_text(encoding="utf-8"))
+
+    job_manager.update_progress(job_id, 6, "Extracting audio")
+    audio_path = analysis_dir / "audio.wav"
+    try:
+        extract_audio(source_video, str(audio_path))
+    except Exception:  # noqa: BLE001 -- a cooking video with no audio is normal (PRD S6)
+        return None
+    _raise_if_cancelled(job_id)
+
+    def on_transcribe_progress(fraction: float) -> None:
+        _raise_if_cancelled(job_id)
+        elapsed = fraction * video_duration
+        step = f"Transcribing ({_format_mmss(elapsed)} / {_format_mmss(video_duration)})"
+        job_manager.update_progress(job_id, 10 + fraction * 18, step)
+
+    job_manager.update_progress(job_id, 10, f"Transcribing (0:00 / {_format_mmss(video_duration)})")
+    try:
+        transcriber = get_transcriber("cuda", "float16") if use_gpu else get_transcriber()
+    except Exception:  # noqa: BLE001 -- GPU requested but unusable; CPU still works
+        transcriber = get_transcriber()
+    transcript = transcriber.transcribe(str(audio_path), on_progress=on_transcribe_progress)
+    transcript_path.write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
+    return transcript
+
+
+def _label_keyframes(job_id, project_id, provider, keyframes, transcript):
+    """Pass 1, with the cache and the honest degrade path (PRD S6, S44)."""
+    settings = get_settings()
+    labels_path = settings.recipe_labels_path(project_id)
+
+    job_manager.update_progress(job_id, 40, "Understanding recipe")
+
+    def on_batch(fraction: float) -> None:
+        _raise_if_cancelled(job_id)
+        job_manager.update_progress(job_id, 40 + fraction * 32, "Understanding recipe")
+
+    try:
+        labels = vision_labeler.label_frames(provider, keyframes, transcript, on_progress=on_batch)
+    except VisionUnsupportedError:
+        alternative = vision_capability.find_vision_model(provider)
+        return [], vision_capability.degraded_message(provider, alternative)
+
+    vision_labeler.save_labels(labels_path, labels)
+    return labels, None
+
+
+def _prepare_scene_framing(job_id, project_id, clip_id, source_video, analysis: RecipeAnalysis, faceless: bool) -> None:
+    """Work out each scene's 9:16 framing now, so the timeline can already
+    say which scenes could not be kept faceless (PRD S17)."""
+    settings = get_settings()
+    scenes = analysis.scenes
+    for index, scene in enumerate(scenes):
+        _raise_if_cancelled(job_id)
+        job_manager.update_progress(
+            job_id, 84 + 14 * index / max(1, len(scenes)), "Preparing faceless 9:16 preview"
+        )
+        scene_dir = settings.recipe_scene_dir(project_id, clip_id, scene.scene_id)
+        scene_dir.mkdir(parents=True, exist_ok=True)
+        segment_path = scene_dir / "framing_probe.mp4"
+        try:
+            cut_subclip(source_video, scene.source_start, scene.duration, str(segment_path))
+            plan, check = face_check.resolve_faceless(
+                video_path=str(segment_path),
+                target_width=TARGET_WIDTH,
+                target_height=TARGET_HEIGHT,
+                faceless=faceless,
+            )
+        except Exception as exc:  # noqa: BLE001 -- a scene that won't scan still gets a usable crop
+            metadata = probe_metadata(source_video)
+            plan = face_check.center_fallback_plan(metadata.width, metadata.height, TARGET_WIDTH, TARGET_HEIGHT)
+            check = None
+            plan.fallback_reason = f"Framing fell back to a centre crop: {exc}"
+        finally:
+            segment_path.unlink(missing_ok=True)
+        scene.plan = plan
+        scene.face_check = check
+    store.replace_scenes(clip_id, scenes)
+
+
+def run_recipe_generate_job(
+    job_id: str,
+    clip_id: str,
+    audio_mode: str = "keep",
+    volume_percent: int = 20,
+    output_folder: str | None = None,
+) -> None:
+    """Render the approved timeline into one video.
+
+    Scenes are cached by content, so a second run that only changes the audio
+    or the running order re-encodes nothing at all (PRD S28/S29).
+    """
+    settings = get_settings()
+    try:
+        job_manager.start(job_id)
+        with get_connection() as conn:
+            clip = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+            if clip is None:
+                raise ValueError(f"Recipe video not found: {clip_id}")
+            project = conn.execute("SELECT * FROM projects WHERE id = ?", (clip["project_id"],)).fetchone()
+
+        project_id = clip["project_id"]
+        source_video = project["source_video_path"]
+        scenes = [scene for scene in store.load_scenes(clip_id) if scene.enabled]
+        if not scenes:
+            raise ValueError("The timeline is empty. Keep at least one scene before generating the video.")
+
+        clip_dir = settings.clip_dir(project_id, clip_id)
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        final_path = clip_dir / "video.mp4"
+
+        with _render_slot(job_id):
+            scene_paths = []
+            for index, scene in enumerate(scenes):
+                _raise_if_cancelled(job_id)
+                job_manager.update_progress(
+                    job_id, 5 + 80 * index / len(scenes), f"Rendering scene {index + 1} of {len(scenes)}"
+                )
+                plan = scene.plan
+                if plan is None:
+                    metadata = probe_metadata(source_video)
+                    plan = face_check.center_fallback_plan(
+                        metadata.width, metadata.height, TARGET_WIDTH, TARGET_HEIGHT
+                    )
+                scene_path, _rendered = recipe_assemble.ensure_scene_rendered(
+                    source_video,
+                    scene_dir=settings.recipe_scene_dir(project_id, clip_id, scene.scene_id),
+                    start=scene.source_start,
+                    end=scene.source_end,
+                    plan=plan,
+                )
+                scene_paths.append(scene_path)
+
+            _raise_if_cancelled(job_id)
+            job_manager.update_progress(job_id, 90, "Assembling video")
+            recipe_assemble.assemble(
+                scene_paths,
+                final_path,
+                audio_mode=AudioMode(audio_mode),
+                volume_percent=volume_percent,
+                concat_path=clip_dir / "concat.txt",
+            )
+
+        store.set_clip_video(clip_id, str(final_path), sum(scene.duration for scene in scenes))
+
+        if output_folder:
+            job_manager.update_progress(job_id, 95, "Copying to output folder")
+            with get_connection() as conn:
+                refreshed = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+            _copy_to_output_folder(refreshed, final_path, None, output_folder)
+
+        job_manager.update_progress(job_id, 100, "Done")
         job_manager.complete(job_id)
     except JobCancelled:
         return

@@ -2,19 +2,27 @@ from app.db.connection import get_connection, init_db
 from app.db.schema import SCHEMA_STATEMENTS
 
 
+def _expected_tables() -> set[str]:
+    return {"projects", "clips", "social_kits", "social_kit_versions", "ai_providers", "jobs", "recipe_scenes"}
+
+
 def test_init_db_creates_all_tables():
     init_db()
     with get_connection() as conn:
         rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     table_names = {row["name"] for row in rows}
-    for table in ("projects", "clips", "social_kits", "social_kit_versions", "ai_providers", "jobs"):
+    for table in _expected_tables():
         assert table in table_names
 
 
 def test_init_db_is_idempotent():
     init_db()
     init_db()  # must not raise on re-run
-    assert len(SCHEMA_STATEMENTS) == 6
+    with get_connection() as conn:
+        created = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    # Every statement in the list produced a table, and running twice did not
+    # duplicate or break any of them.
+    assert len(SCHEMA_STATEMENTS) == len(created & _expected_tables())
 
 
 def test_init_db_migration_adds_subtitle_and_intro_columns():

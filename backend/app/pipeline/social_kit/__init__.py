@@ -54,3 +54,67 @@ def generate_social_kit(config: ProviderConfig, clip_summary: str, platform: str
     raw_response = complete_chat(config, system_prompt, user_prompt)
     parsed = extract_json(raw_response)
     return SocialKitContent(**parsed)
+
+
+# A recipe video is not sold the way a talking-head clip is: the hook is the
+# dish, the promise is "you could cook this", and the caption carries a
+# save-for-later. Same engine, same storage, different words (PRD S31/S32).
+_RECIPE_SYSTEM_PROMPT = """You are writing the publishing kit for one short cooking video on {platform}.
+
+The video is a long cooking session condensed into about a minute: the finished dish, then the cooking \
+process from preparation to plating.
+
+Write in {language}.
+
+Rules:
+- Titles must name the dish and promise something concrete (simple, quick, the sauce soaks in).
+- Never claim an ingredient or a step that is not in the recipe summary you are given.
+- The CTA should suit food content: saving the recipe for later, trying it at the weekend.
+- Thumbnail text is at most 4 words, in two short lines.
+- Respond with ONLY a JSON object, no commentary, in exactly this shape:
+{{"titles": [{{"title": "<title>", "score": <0-100>}}, {{"title": "<title>", "score": <0-100>}}, \
+{{"title": "<title>", "score": <0-100>}}], \
+"alternative_hooks": ["<short opening hook>", "<short opening hook>"], \
+"description": "<caption describing the dish and the process>", \
+"hashtags": ["<tag1>", "<tag2>", "<tag3>", "<tag4>", "<tag5>"], \
+"cta": "<one short call to action>", \
+"thumbnail_text": "<max 4 words>", \
+"thumbnail_idea": "<short visual description of the thumbnail>", \
+"thumbnail_prompt": "<detailed prompt for an AI image generator>"}}
+"""
+
+
+class RecipeSocialKitExtras(BaseModel):
+    """The recipe-only half of the kit (PRD S31). Stored in
+    `social_kits.extra_json` so the shared columns keep their meaning."""
+
+    alternative_hooks: list[str] = []
+    cta: str = ""
+    thumbnail_text: str = ""
+
+
+def build_recipe_prompt(recipe_summary: str, platform: str, language: str = "id") -> tuple[str, str]:
+    system_prompt = _RECIPE_SYSTEM_PROMPT.format(
+        platform=platform, language="Indonesian" if language == "id" else "English"
+    )
+    return system_prompt, f"Recipe summary:\n{recipe_summary}"
+
+
+def generate_recipe_social_kit(
+    config: ProviderConfig, recipe_summary: str, platform: str, language: str = "id"
+) -> tuple[SocialKitContent, RecipeSocialKitExtras]:
+    system_prompt, user_prompt = build_recipe_prompt(recipe_summary, platform, language)
+    parsed = extract_json(complete_chat(config, system_prompt, user_prompt))
+    content = SocialKitContent(
+        titles=[TitleOption(**title) for title in parsed.get("titles", [])],
+        description=str(parsed.get("description", "")),
+        hashtags=[str(tag) for tag in parsed.get("hashtags", [])],
+        thumbnail_idea=str(parsed.get("thumbnail_idea", "")),
+        thumbnail_prompt=str(parsed.get("thumbnail_prompt", "")),
+    )
+    extras = RecipeSocialKitExtras(
+        alternative_hooks=[str(hook) for hook in parsed.get("alternative_hooks", [])][:4],
+        cta=str(parsed.get("cta", "")),
+        thumbnail_text=str(parsed.get("thumbnail_text", "")),
+    )
+    return content, extras

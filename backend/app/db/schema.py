@@ -93,6 +93,31 @@ SCHEMA_STATEMENTS = [
         finished_at TEXT
     )
     """,
+    # One row per scene of a Recipe Clipper video, in playing order. The
+    # recipe video itself is an ordinary `clips` row, so everything already
+    # built around clips -- Social Kit, copy-to-folder, storage accounting,
+    # cascade delete -- keeps working untouched.
+    """
+    CREATE TABLE IF NOT EXISTS recipe_scenes (
+        id TEXT PRIMARY KEY,
+        clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        title TEXT,
+        source_start REAL NOT NULL,
+        source_end REAL NOT NULL,
+        is_hook INTEGER NOT NULL DEFAULT 0,
+        vo_guide TEXT,
+        on_screen_text TEXT,
+        reason TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        plan_json TEXT,
+        face_check_json TEXT,
+        alternatives_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
 ]
 
 # `CREATE TABLE IF NOT EXISTS` above is a no-op on a database that already
@@ -111,4 +136,11 @@ MIGRATIONS = [
     # API rejects a taken name up front; this index is what settles two
     # requests that raced past that check.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name_unique ON projects(name COLLATE NOCASE)",
+    # Which flow a project belongs to: 'ai_clipper' (hot moments, many clips)
+    # or 'recipe' (one condensed cooking video). Existing rows predate Recipe
+    # Clipper, so the default is what they have always been.
+    "ALTER TABLE projects ADD COLUMN mode TEXT NOT NULL DEFAULT 'ai_clipper'",
+    # Recipe-only Social Kit fields (CTA, alternative hooks, thumbnail text)
+    # that the shared columns have no place for.
+    "ALTER TABLE social_kits ADD COLUMN extra_json TEXT",
 ]

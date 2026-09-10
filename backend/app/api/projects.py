@@ -57,10 +57,19 @@ def create_project(payload: ProjectCreate) -> Project:
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO projects (id, name, source_video_path, source_duration, source_resolution, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+                INSERT INTO projects (id, name, source_video_path, source_duration, source_resolution, status, mode, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)
                 """,
-                (project_id, name, str(dest_path), metadata.duration, f"{metadata.width}x{metadata.height}", now, now),
+                (
+                    project_id,
+                    name,
+                    str(dest_path),
+                    metadata.duration,
+                    f"{metadata.width}x{metadata.height}",
+                    payload.mode,
+                    now,
+                    now,
+                ),
             )
             conn.commit()
     except sqlite3.IntegrityError as exc:
