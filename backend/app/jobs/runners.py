@@ -557,7 +557,8 @@ def run_recipe_analyze_job(
         keyframes = frame_sampler.select_keyframes(segments, video_duration)
         _raise_if_cancelled(job_id)
 
-        labels, degraded_warning = _label_keyframes(job_id, project_id, provider, keyframes, transcript)
+        notes: list[str] = []
+        labels, degraded_warning = _label_keyframes(job_id, project_id, provider, keyframes, transcript, notes)
         _raise_if_cancelled(job_id)
 
         if not labels and (transcript is None or not transcript.text.strip()):
@@ -575,10 +576,12 @@ def run_recipe_analyze_job(
             segments,
             video_duration,
             faceless=faceless,
+            on_model_switch=_model_switch_note(notes),
         )
         if degraded_warning:
             analysis.visual_analysis = "unavailable"
             analysis.warnings.insert(0, degraded_warning)
+        analysis.warnings.extend(note for note in notes if note not in analysis.warnings)
         if not analysis.scenes:
             raise ValueError(
                 "No cooking steps could be identified in this video. If this is not a cooking video, "
@@ -637,25 +640,63 @@ def _recipe_transcript(job_id, project_id, source_video, video_duration, use_gpu
     return transcript
 
 
-def _label_keyframes(job_id, project_id, provider, keyframes, transcript):
-    """Pass 1, with the cache and the honest degrade path (PRD S6, S44)."""
+def _label_keyframes(job_id, project_id, provider, keyframes, transcript, notes: list[str]):
+    """Pass 1, resumable, with the honest degrade path (PRD S6, S44, S46).
+
+    Frames labelled by an earlier run are reused as they are, and each new
+    batch is written to disk as it arrives -- so a provider that falls over
+    halfway costs the user the remaining batches, not all of them.
+    """
     settings = get_settings()
     labels_path = settings.recipe_labels_path(project_id)
 
+    done = vision_labeler.load_labels(labels_path)
+    already = {label.index for label in done}
+    todo = [keyframe for keyframe in keyframes if keyframe.index not in already]
+    if done and todo:
+        notes.append(f"Reused {len(done)} frames already analysed earlier; {len(todo)} left to look at.")
+    if not todo:
+        return done, None
+
     job_manager.update_progress(job_id, 40, "Understanding recipe")
 
-    def on_batch(fraction: float) -> None:
+    def on_progress(fraction: float) -> None:
         _raise_if_cancelled(job_id)
         job_manager.update_progress(job_id, 40 + fraction * 32, "Understanding recipe")
 
+    def on_batch(batch_labels) -> None:
+        done.extend(batch_labels)
+        vision_labeler.save_labels(labels_path, done)
+
     try:
-        labels = vision_labeler.label_frames(provider, keyframes, transcript, on_progress=on_batch)
+        vision_labeler.label_frames(
+            provider,
+            todo,
+            transcript,
+            on_progress=on_progress,
+            on_batch=on_batch,
+            on_model_switch=_model_switch_note(notes),
+        )
     except VisionUnsupportedError:
         alternative = vision_capability.find_vision_model(provider)
         return [], vision_capability.degraded_message(provider, alternative)
 
-    vision_labeler.save_labels(labels_path, labels)
-    return labels, None
+    return sorted(done, key=lambda label: label.time), None
+
+
+def _model_switch_note(notes: list[str]):
+    """Records a model substitution so the finished analysis can say which
+    model actually did the work."""
+
+    def note(previous: str, replacement: str) -> None:
+        message = (
+            f'"{previous}" was overloaded, so the analysis continued on "{replacement}". '
+            "Set that model under Settings > AI Model if you want to keep using it."
+        )
+        if message not in notes:
+            notes.append(message)
+
+    return note
 
 
 def _prepare_scene_framing(job_id, project_id, clip_id, source_video, analysis: RecipeAnalysis, faceless: bool) -> None:

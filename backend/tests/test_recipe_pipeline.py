@@ -258,3 +258,52 @@ def test_audio_modes_map_to_the_right_ffmpeg_treatment():
 def test_assembling_nothing_is_an_error_not_an_empty_file(tmp_path):
     with pytest.raises(ValueError):
         assemble.assemble([], tmp_path / "out.mp4")
+
+
+def test_a_failed_run_resumes_from_the_frames_already_labelled(tmp_path, monkeypatch):
+    """Losing eleven paid-for batches because the twelfth failed is the thing
+    this avoids (PRD S46)."""
+    from app.jobs import runners
+    from app.pipeline.recipe import vision_labeler as labeler
+    from app.pipeline.recipe.models import FrameLabel
+
+    labels_path = tmp_path / "vision_labels.json"
+    keyframes = [VisualSegment(index=i, start=i, end=i + 1, peak_time=float(i), motion=1.0) for i in range(4)]
+    labeler.save_labels(labels_path, [FrameLabel(index=0, time=0.0, label="CUTTING", confidence=90)])
+
+    settings = type("S", (), {"recipe_labels_path": lambda self, project_id: labels_path})()
+    monkeypatch.setattr(runners, "get_settings", lambda: settings)
+    monkeypatch.setattr(runners.job_manager, "update_progress", lambda *a, **k: None)
+
+    sent = {}
+
+    def fake_label_frames(config, todo, transcript, on_progress=None, on_batch=None, on_model_switch=None):
+        sent["todo"] = [frame.index for frame in todo]
+        produced = [FrameLabel(index=frame.index, time=frame.peak_time, label="SAUTEING") for frame in todo]
+        if on_batch:
+            on_batch(produced)
+        return produced
+
+    monkeypatch.setattr(runners.vision_labeler, "label_frames", fake_label_frames)
+
+    notes: list[str] = []
+    labels, degraded = runners._label_keyframes("job", "proj", None, keyframes, None, notes)
+
+    assert sent["todo"] == [1, 2, 3]  # frame 0 was already done
+    assert len(labels) == 4
+    assert degraded is None
+    assert any("Reused 1 frames" in note for note in notes)
+    # and the new batch was flushed to disk as it arrived
+    assert len(labeler.load_labels(labels_path)) == 4
+
+
+def test_a_model_substitution_is_reported_not_hidden():
+    from app.jobs import runners
+
+    notes: list[str] = []
+    note = runners._model_switch_note(notes)
+    note("gemini-flash-latest", "gemini-3.5-flash")
+    note("gemini-flash-latest", "gemini-3.5-flash")  # same switch twice, one note
+
+    assert len(notes) == 1
+    assert "gemini-flash-latest" in notes[0] and "gemini-3.5-flash" in notes[0]

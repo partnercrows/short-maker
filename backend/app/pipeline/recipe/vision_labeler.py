@@ -56,11 +56,18 @@ def label_frames(
     keyframes: list[VisualSegment],
     transcript: TranscriptResult | None = None,
     on_progress: Callable[[float], None] | None = None,
+    on_batch: Callable[[list[FrameLabel]], None] | None = None,
+    on_model_switch: Callable[[str, str], None] | None = None,
 ) -> list[FrameLabel]:
     """Labels every keyframe, one batch of images per provider call.
 
     Raises `VisionUnsupportedError` as soon as the model turns out to be
     text-only, so the caller can degrade once instead of failing per batch.
+
+    `on_batch` is handed each batch's labels the moment they parse. That is
+    what makes a long analysis resumable: if the eleventh call fails, the ten
+    batches already paid for are on disk, and running Analyze again starts
+    from there instead of buying them a second time.
     """
     system_prompt = _SYSTEM_PROMPT.format(labels=" | ".join(SCENE_LABELS))
     batches = [keyframes[i : i + VISION_BATCH_SIZE] for i in range(0, len(keyframes), VISION_BATCH_SIZE)]
@@ -73,12 +80,15 @@ def label_frames(
             # than send a batch of prose about pictures the model can't see.
             continue
         try:
-            raw = complete_chat_multimodal(config, system_prompt, parts)
+            raw = complete_chat_multimodal(config, system_prompt, parts, on_model_switch=on_model_switch)
         except Exception as exc:  # noqa: BLE001 -- one specific cause is handled, the rest propagate
             if classify_vision_failure(exc):
                 raise VisionUnsupportedError(str(exc)) from exc
             raise
-        labels.extend(_parse_batch(raw, batch))
+        parsed = _parse_batch(raw, batch)
+        labels.extend(parsed)
+        if on_batch and parsed:
+            on_batch(parsed)
         if on_progress:
             on_progress((batch_number + 1) / len(batches))
 

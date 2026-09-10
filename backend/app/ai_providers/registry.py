@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import time
+from typing import Callable
 from enum import StrEnum
 
 import httpx
@@ -39,6 +40,18 @@ _RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 _PROBE_PROMPT = "Reply with OK."
 _PROBE_SYSTEM_PROMPT = "Answer in one word."
 _MAX_MODEL_PROBES = 3
+# A 1x1 JPEG: the smallest thing that is unambiguously an image, used to check
+# that a stand-in model can actually see before handing it a request full of
+# video frames.
+_PROBE_IMAGE = bytes.fromhex(
+    "ffd8ffe000104a46494600010100000100010000ffdb004300ffffffffffffffffffffffffffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffc2000b080001000101011100ffc40014000100000000000000000000000000000009"
+    "ffda0008010100000000013fffd9"
+)
+# Names that plausibly accept images. Only used to order probe candidates -- a
+# model is believed only once it has actually answered one.
+_VISION_NAME_HINTS = ("gemini", "gpt-4o", "gpt-5", "vision", "-vl", "llava", "pixtral", "claude", "qwen-vl")
 # Model ids that can't serve a chat completion at all, so probing them would
 # only burn time on a guaranteed failure.
 _NON_CHAT_MODEL_MARKERS = ("image", "tts", "audio", "embed", "veo", "lyria", "imagen", "banana", "research", "guard")
@@ -168,18 +181,30 @@ def _is_retryable(exc: Exception) -> bool:
     return False
 
 
-def complete_chat(config: ProviderConfig, system_prompt: str, user_prompt: str) -> str:
+def complete_chat(
+    config: ProviderConfig,
+    system_prompt: str,
+    user_prompt: str,
+    on_model_switch: Callable[[str, str], None] | None = None,
+) -> str:
     """One vendor-agnostic entry point: send a system+user prompt, get the
     model's text response back. Raises on failure -- callers (clip
     selection, Social Kit) decide how to handle/report that.
 
     Transparently retries with backoff on a transient provider error
     (rate limit / overload / upstream 5xx); any other error, or exhausting
-    the retries, raises immediately."""
-    return _complete_with_retry(config, system_prompt, user_prompt)
+    the retries, raises immediately -- unless another model on the same key
+    can answer, in which case the request is completed with that one and
+    `on_model_switch(from_model, to_model)` is called to say so."""
+    return _complete_with_retry(config, system_prompt, user_prompt, on_model_switch=on_model_switch)
 
 
-def complete_chat_multimodal(config: ProviderConfig, system_prompt: str, parts: list[PromptPart]) -> str:
+def complete_chat_multimodal(
+    config: ProviderConfig,
+    system_prompt: str,
+    parts: list[PromptPart],
+    on_model_switch: Callable[[str, str], None] | None = None,
+) -> str:
     """`complete_chat` with images allowed in the user turn -- same providers,
     same retry and error contract.
 
@@ -187,24 +212,59 @@ def complete_chat_multimodal(config: ProviderConfig, system_prompt: str, parts: 
     call, so a caller whose frames went missing still travels the identical
     path the rest of the app uses."""
     if not any(isinstance(part, ImagePart) for part in parts):
-        return _complete_with_retry(config, system_prompt, "".join(str(part) for part in parts))
-    return _complete_with_retry(config, system_prompt, parts)
+        return _complete_with_retry(
+            config, system_prompt, "".join(str(part) for part in parts), on_model_switch=on_model_switch
+        )
+    return _complete_with_retry(config, system_prompt, parts, on_model_switch=on_model_switch)
 
 
-def _complete_with_retry(config: ProviderConfig, system_prompt: str, user_content: str | list[PromptPart]) -> str:
+def _complete_with_retry(
+    config: ProviderConfig,
+    system_prompt: str,
+    user_content: str | list[PromptPart],
+    on_model_switch: Callable[[str, str], None] | None = None,
+) -> str:
     for attempt, delay in enumerate([0, *_RETRY_BACKOFF_SECONDS]):
         if delay:
             time.sleep(delay)
         try:
-            if config.provider_type == ProviderType.GEMINI:
-                return _complete_chat_gemini(config, system_prompt, user_content)
-            return _complete_chat_openai_compatible(config, system_prompt, user_content)
+            return _complete_once(config, system_prompt, user_content)
         except Exception as exc:  # noqa: BLE001 -- re-raised immediately unless retryable
             if not _is_retryable(exc):
                 raise
             if attempt == len(_RETRY_BACKOFF_SECONDS):
-                raise ProviderUnavailableError(_unavailable_message(config, exc)) from exc
+                return _complete_on_another_model(config, system_prompt, user_content, exc, on_model_switch)
     raise AssertionError("unreachable")  # the loop above always returns or raises
+
+
+def _complete_on_another_model(
+    config: ProviderConfig,
+    system_prompt: str,
+    user_content: str | list[PromptPart],
+    exc: Exception,
+    on_model_switch: Callable[[str, str], None] | None,
+) -> str:
+    """Last resort before giving up: finish the request on a model that is
+    actually answering.
+
+    A model being overloaded is the provider's weather, not a decision the
+    user made -- and losing a long analysis to it, minutes in, helps nobody.
+    We already probe for a working model just to name one in the error; using
+    it is strictly better than telling the user to do the same thing by hand.
+    The substitution is reported, never silent, and nothing is written back to
+    the user's settings.
+    """
+    needs_vision = isinstance(user_content, list) and any(isinstance(part, ImagePart) for part in user_content)
+    alternative = _find_answering_model(config, with_image=needs_vision)
+    if alternative:
+        try:
+            answer = _complete_once(config.model_copy(update={"model": alternative}), system_prompt, user_content)
+        except Exception:  # noqa: BLE001 -- the stand-in failed too; report the original problem
+            raise ProviderUnavailableError(_unavailable_message(config, exc, alternative)) from exc
+        if on_model_switch:
+            on_model_switch(config.model, alternative)
+        return answer
+    raise ProviderUnavailableError(_unavailable_message(config, exc, None)) from exc
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -213,7 +273,7 @@ def _is_rate_limit(exc: Exception) -> bool:
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
 
 
-def _unavailable_message(config: ProviderConfig, exc: Exception) -> str:
+def _unavailable_message(config: ProviderConfig, exc: Exception, alternative: str | None = None) -> str:
     attempts = 1 + len(_RETRY_BACKOFF_SECONDS)
     cause = (
         "has no quota left for your API key right now"
@@ -224,7 +284,6 @@ def _unavailable_message(config: ProviderConfig, exc: Exception) -> str:
         f'The AI model "{config.model}" {cause} -- it failed {attempts} times in a row. '
         "This is not a problem with your video or your API key."
     )
-    alternative = _find_answering_model(config)
     if alternative:
         return (
             f'{message} "{alternative}" answered fine with the same API key just now: '
@@ -233,7 +292,7 @@ def _unavailable_message(config: ProviderConfig, exc: Exception) -> str:
     return f"{message} Try again in a few minutes, or pick a different model under Settings > AI Model."
 
 
-def _find_answering_model(config: ProviderConfig) -> str | None:
+def _find_answering_model(config: ProviderConfig, *, with_image: bool = False) -> str | None:
     """Probes the provider for a model that responds *now*, so the error can
     name a way out rather than just a failure.
 
@@ -242,10 +301,15 @@ def _find_answering_model(config: ProviderConfig) -> str | None:
     error message into a worse hang or a second exception."""
     try:
         candidates = _probe_candidates(config)
+        if with_image:
+            candidates = [name for name in candidates if any(hint in name.lower() for hint in _VISION_NAME_HINTS)]
+        payload: str | list[PromptPart] = (
+            [_PROBE_PROMPT, ImagePart(data=_PROBE_IMAGE)] if with_image else _PROBE_PROMPT
+        )
         for model in candidates[:_MAX_MODEL_PROBES]:
             probe = config.model_copy(update={"model": model})
             try:
-                if _complete_once(probe, _PROBE_SYSTEM_PROMPT, _PROBE_PROMPT).strip():
+                if _complete_once(probe, _PROBE_SYSTEM_PROMPT, payload).strip():
                     return model
             except Exception:  # noqa: BLE001 -- this model is out too; try the next
                 continue
@@ -300,9 +364,9 @@ def _list_model_ids(creds: ProviderCredentials) -> list[str]:
     return [item["id"] for item in response.json().get("data", []) if item.get("id")]
 
 
-def _complete_once(config: ProviderConfig, system_prompt: str, user_prompt: str) -> str:
-    """One attempt, no retries -- used by the probe, which is measuring
-    whether a model answers at all, not trying to make it answer."""
+def _complete_once(config: ProviderConfig, system_prompt: str, user_prompt: str | list[PromptPart]) -> str:
+    """One attempt, no retries -- the single place that picks a provider
+    adapter, used by the retry loop, the failover and the probes alike."""
     if config.provider_type == ProviderType.GEMINI:
         return _complete_chat_gemini(config, system_prompt, user_prompt)
     return _complete_chat_openai_compatible(config, system_prompt, user_prompt)

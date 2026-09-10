@@ -83,6 +83,7 @@ def analyze_recipe(
     segments: list[VisualSegment],
     video_duration: float,
     faceless: bool = True,
+    on_model_switch=None,
 ) -> RecipeAnalysis:
     language = detect_language(transcript)
     system_prompt = _SYSTEM_PROMPT.format(
@@ -90,7 +91,9 @@ def analyze_recipe(
         language="Indonesian" if language == "id" else "the same language as the transcript",
         labels=" | ".join(SCENE_LABELS),
     )
-    raw = complete_chat(config, system_prompt, _build_user_prompt(labels, transcript, segments))
+    raw = complete_chat(
+        config, system_prompt, _build_user_prompt(labels, transcript, segments), on_model_switch=on_model_switch
+    )
     parsed = extract_json(raw)
     if not isinstance(parsed, dict):
         raise ValueError(f"Expected a recipe object, got: {type(parsed)}")

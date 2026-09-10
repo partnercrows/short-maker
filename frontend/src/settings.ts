@@ -25,7 +25,10 @@ export function defaultSettings(): AppSettings {
     language: "id",
     outputFolder: "",
     useGpu: false,
-    provider: { providerType: "gemini", model: "gemini-flash-latest", apiKey: "", baseUrl: "" },
+    // "gemini-flash-latest" is an alias Google points at whichever flash model
+    // is newest, and in practice that pool is the one that answers "this model
+    // is currently experiencing high demand". A pinned model is steadier.
+    provider: { providerType: "gemini", model: "gemini-3.5-flash", apiKey: "", baseUrl: "" },
   };
 }
 
