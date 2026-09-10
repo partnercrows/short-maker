@@ -117,6 +117,9 @@ export interface Project {
   source_resolution: string | null;
   status: string;
   created_at: string;
+  // Which flow the project belongs to: "ai_clipper" or "recipe". Projects
+  // created before Recipe Clipper existed report "ai_clipper".
+  mode: string;
   // What this project's folder occupies on disk right now (source copy +
   // analysis + every clip's outputs), measured by the backend on read.
   storage_bytes: number;
@@ -177,12 +180,12 @@ export function listProviderModels(creds: ProviderCredentials): Promise<ModelInf
   return request("/ai-providers/models", { method: "POST", body: JSON.stringify(creds) }, 20_000);
 }
 
-export function createProject(name: string, sourceVideoPath: string): Promise<Project> {
+export function createProject(name: string, sourceVideoPath: string, mode = "ai_clipper"): Promise<Project> {
   // Longer timeout: this copies the source video into project storage server-side,
   // which can take a while for a large file.
   return request(
     "/projects",
-    { method: "POST", body: JSON.stringify({ name, source_video_path: sourceVideoPath }) },
+    { method: "POST", body: JSON.stringify({ name, source_video_path: sourceVideoPath, mode }) },
     10 * 60_000,
   );
 }
@@ -312,6 +315,8 @@ export interface SocialKit {
   hashtags: string | null;
   thumbnail_idea: string | null;
   thumbnail_prompt: string | null;
+  // Recipe Clipper only: {"alternative_hooks", "cta", "thumbnail_text"}.
+  extra_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -326,6 +331,109 @@ export function generateSocialKit(clipId: string, platform: string, provider: Pr
 
 export function regenerateSocialKit(clipId: string, platform: string, provider: ProviderConfig): Promise<SocialKit> {
   return request(`/social-kit/${clipId}/regenerate`, { method: "POST", body: JSON.stringify({ platform, provider }) }, 60_000);
+}
+
+// --- Recipe Clipper ---------------------------------------------------------
+// One long cooking video condensed into a single short vertical video. Shares
+// projects, jobs and Social Kit with AI Clipper; the timeline of cooking
+// scenes is what is specific to it.
+
+export type RecipeTargetDuration = "1min" | "2min" | "auto";
+export type RecipeAudioMode = "keep" | "lower" | "mute";
+
+export interface RecipeSceneFaceCheck {
+  status: "clean" | "reframed" | "warning";
+  face_frame_ratio: number;
+  worst_overlap: number;
+  strategy_used: string;
+  message: string | null;
+}
+
+export interface RecipeSceneAlternative {
+  start: number;
+  end: number;
+  label: string;
+  confidence: number;
+  subject: string;
+}
+
+export interface RecipeScene {
+  scene_id: string;
+  order: number;
+  label: string;
+  title: string;
+  source_start: number;
+  source_end: number;
+  is_hook: boolean;
+  vo_guide: string;
+  on_screen_text: string;
+  reason: string;
+  enabled: boolean;
+  face_check: RecipeSceneFaceCheck | null;
+  alternatives: RecipeSceneAlternative[];
+}
+
+export interface RecipeIngredient {
+  name: string;
+  confidence: number;
+}
+
+export interface Recipe {
+  project: Project;
+  clip: Clip | null;
+  recipe_name: string | null;
+  main_ingredient: string | null;
+  ingredients: RecipeIngredient[];
+  possible_ingredients: string[];
+  cooking_flow: string[];
+  scenes: RecipeScene[];
+  estimated_duration: number;
+  target_duration: RecipeTargetDuration;
+  faceless: boolean;
+  visual_analysis: "ok" | "unavailable";
+  warnings: string[];
+  vo_script: string;
+  text_guide: string;
+}
+
+export interface RecipeSceneEdit {
+  scene_id: string;
+  source_start?: number;
+  source_end?: number;
+  enabled: boolean;
+}
+
+export function analyzeRecipe(
+  projectId: string,
+  provider: ProviderConfig,
+  targetDuration: RecipeTargetDuration,
+  faceless: boolean,
+  useGpu: boolean,
+): Promise<Job> {
+  return request(`/recipe/${projectId}/analyze`, {
+    method: "POST",
+    body: JSON.stringify({ provider, target_duration: targetDuration, faceless, use_gpu: useGpu }),
+  });
+}
+
+export function getRecipe(projectId: string): Promise<Recipe> {
+  return request(`/recipe/${projectId}`);
+}
+
+export function saveRecipeTimeline(projectId: string, scenes: RecipeSceneEdit[]): Promise<Recipe> {
+  return request(`/recipe/${projectId}/timeline`, { method: "PUT", body: JSON.stringify({ scenes }) });
+}
+
+export function generateRecipeVideo(
+  projectId: string,
+  audioMode: RecipeAudioMode,
+  volumePercent: number,
+  outputFolder?: string,
+): Promise<Job> {
+  return request(`/recipe/${projectId}/generate`, {
+    method: "POST",
+    body: JSON.stringify({ audio_mode: audioMode, volume_percent: volumePercent, output_folder: outputFolder }),
+  });
 }
 
 export function getJob(jobId: string): Promise<Job> {

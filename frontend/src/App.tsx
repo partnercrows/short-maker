@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import AiClipperView from "./AiClipperView";
 import HistoryView from "./HistoryView";
+import RecipeClipperView from "./RecipeClipperView";
 import Sidebar, { type View } from "./Sidebar";
 import SettingsView from "./SettingsView";
 import YouTubeDownloadView from "./YouTubeDownloadView";
@@ -80,7 +81,10 @@ function App() {
 
   function handleOpenProject(project: Project) {
     setOpenProject(project);
-    setView("clipper");
+    // A project belongs to the menu that made it: opening a recipe from
+    // History must land in Recipe Clipper, not in a clip list that would show
+    // its condensed video as if it were a candidate clip.
+    setView(project.mode === "recipe" ? "recipe" : "clipper");
   }
 
   function handleProjectsDeleted(deleted: string[] | "all") {
@@ -112,7 +116,17 @@ function App() {
             key={clipperGeneration}
             settings={settings}
             onSettingsChange={handleSettingsChange}
-            openProject={openProject}
+            openProject={openProject?.mode === "recipe" ? null : openProject}
+          />
+        </div>
+        {/* Kept mounted for the same reason as the clipper: analysis and
+            rendering are long jobs polled from inside the view. */}
+        <div className={view === "recipe" ? "" : "hidden"}>
+          <RecipeClipperView
+            key={`recipe-${clipperGeneration}`}
+            settings={settings}
+            onSettingsChange={handleSettingsChange}
+            openProject={openProject?.mode === "recipe" ? openProject : null}
           />
         </div>
         {view === "history" && (

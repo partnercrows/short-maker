@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { t, type Language } from "./i18n";
 import { getActiveJobs, subscribeActiveJobs } from "./jobStatusStore";
 
-export type View = "clipper" | "history" | "youtube_download" | "settings";
+export type View = "clipper" | "recipe" | "history" | "youtube_download" | "settings";
 
 interface Props {
   view: View;
@@ -42,6 +42,11 @@ export default function Sidebar({ view, onNavigate, language }: Props) {
 
       <nav className="flex flex-col gap-1">
         <NavButton active={view === "clipper"} label={t(language, "nav_ai_clipper")} onClick={() => onNavigate("clipper")} />
+        <NavButton
+          active={view === "recipe"}
+          label={`🍳 ${t(language, "nav_recipe_clipper")}`}
+          onClick={() => onNavigate("recipe")}
+        />
         <NavButton active={view === "history"} label={t(language, "nav_history")} onClick={() => onNavigate("history")} />
         <NavButton
           active={view === "youtube_download"}

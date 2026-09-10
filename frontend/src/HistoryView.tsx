@@ -200,7 +200,20 @@ export default function HistoryView({ language, onOpenProject, onProjectsDeleted
           <div key={p.id} className="rounded border border-neutral-200 p-4 dark:border-neutral-800">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="font-medium">{p.name}</div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{p.name}</span>
+                  <span
+                    className={`rounded px-2 py-0.5 text-xs ${
+                      p.mode === "recipe"
+                        ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                        : "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+                    }`}
+                  >
+                    {p.mode === "recipe"
+                      ? `🍳 ${t(language, "history_kind_recipe")}`
+                      : t(language, "history_kind_ai_clipper")}
+                  </span>
+                </div>
                 <div className="text-xs text-neutral-500">
                   {t(language, "history_created")}: {new Date(p.created_at).toLocaleString()} -- {t(language, "history_duration")}:{" "}
                   {p.source_duration?.toFixed(0)}s -- {t(language, "history_storage")}: {formatBytes(p.storage_bytes ?? 0)}
