@@ -14,6 +14,11 @@ class ReframeMode(StrEnum):
     # Internal-only fallback rung (PRD S14) — never user-selectable, only
     # reached via the AUTO/ACTIVE_SPEAKER/FACE_TRACKING fallback chains.
     PERSON_DETECTION = "person_detection"
+    # Recipe Clipper's own strategy: follow the cooking action, keep faces
+    # out of frame. Deliberately absent from the fallback chains in modes.py
+    # -- Recipe Clipper resolves its framing directly, and AI Clipper must
+    # never land here.
+    FACELESS_COOKING = "faceless_cooking"
 
 
 class CropWindow(BaseModel):

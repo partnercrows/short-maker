@@ -14,6 +14,7 @@ side (PRD S5/S40).
 
 from __future__ import annotations
 
+import base64
 import time
 from enum import StrEnum
 
@@ -77,6 +78,22 @@ class ProviderConfig(BaseModel):
     model: str
     api_key: str
     base_url: str | None = None
+
+
+class ImagePart(BaseModel):
+    """One image in a multimodal user turn.
+
+    Recipe Clipper has to show the model what is in the pan -- a cooking video
+    is mostly visual and often has no useful narration at all -- while every
+    existing caller keeps sending plain text."""
+
+    data: bytes
+    mime_type: str = "image/jpeg"
+
+
+# A user turn is an ordered mix of text and images: the text before each image
+# is what tells the model which timestamp it is looking at.
+PromptPart = str | ImagePart
 
 
 class ProviderCredentials(BaseModel):
@@ -159,13 +176,29 @@ def complete_chat(config: ProviderConfig, system_prompt: str, user_prompt: str) 
     Transparently retries with backoff on a transient provider error
     (rate limit / overload / upstream 5xx); any other error, or exhausting
     the retries, raises immediately."""
+    return _complete_with_retry(config, system_prompt, user_prompt)
+
+
+def complete_chat_multimodal(config: ProviderConfig, system_prompt: str, parts: list[PromptPart]) -> str:
+    """`complete_chat` with images allowed in the user turn -- same providers,
+    same retry and error contract.
+
+    A parts list that turns out to hold no image collapses to the plain-text
+    call, so a caller whose frames went missing still travels the identical
+    path the rest of the app uses."""
+    if not any(isinstance(part, ImagePart) for part in parts):
+        return _complete_with_retry(config, system_prompt, "".join(str(part) for part in parts))
+    return _complete_with_retry(config, system_prompt, parts)
+
+
+def _complete_with_retry(config: ProviderConfig, system_prompt: str, user_content: str | list[PromptPart]) -> str:
     for attempt, delay in enumerate([0, *_RETRY_BACKOFF_SECONDS]):
         if delay:
             time.sleep(delay)
         try:
             if config.provider_type == ProviderType.GEMINI:
-                return _complete_chat_gemini(config, system_prompt, user_prompt)
-            return _complete_chat_openai_compatible(config, system_prompt, user_prompt)
+                return _complete_chat_gemini(config, system_prompt, user_content)
+            return _complete_chat_openai_compatible(config, system_prompt, user_content)
         except Exception as exc:  # noqa: BLE001 -- re-raised immediately unless retryable
             if not _is_retryable(exc):
                 raise
@@ -275,11 +308,14 @@ def _complete_once(config: ProviderConfig, system_prompt: str, user_prompt: str)
     return _complete_chat_openai_compatible(config, system_prompt, user_prompt)
 
 
-def _complete_chat_gemini(config: ProviderConfig, system_prompt: str, user_prompt: str) -> str:
+def _complete_chat_gemini(config: ProviderConfig, system_prompt: str, user_prompt: str | list[PromptPart]) -> str:
     client = genai.Client(api_key=config.api_key)
+    # A text-only request still passes the bare string straight through, so the
+    # request AI Clipper sends is the one it has always sent.
+    contents = user_prompt if isinstance(user_prompt, str) else _gemini_parts(user_prompt)
     response = client.models.generate_content(
         model=config.model,
-        contents=user_prompt,
+        contents=contents,
         config=genai_types.GenerateContentConfig(system_instruction=system_prompt),
     )
     if not response.text:
@@ -287,11 +323,14 @@ def _complete_chat_gemini(config: ProviderConfig, system_prompt: str, user_promp
     return response.text
 
 
-def _complete_chat_openai_compatible(config: ProviderConfig, system_prompt: str, user_prompt: str) -> str:
+def _complete_chat_openai_compatible(
+    config: ProviderConfig, system_prompt: str, user_prompt: str | list[PromptPart]
+) -> str:
     base_url = config.base_url or OPENAI_COMPATIBLE_DEFAULT_BASE_URLS.get(config.provider_type.value)
     if not base_url:
         raise ValueError("Custom providers require a base_url.")
 
+    is_text_only = isinstance(user_prompt, str)
     response = httpx.post(
         f"{base_url.rstrip('/')}/chat/completions",
         headers={"Authorization": f"Bearer {config.api_key}"},
@@ -299,11 +338,33 @@ def _complete_chat_openai_compatible(config: ProviderConfig, system_prompt: str,
             "model": config.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": user_prompt if is_text_only else _openai_content(user_prompt)},
             ],
         },
-        timeout=120.0,
+        # Images are megabytes of base64 and minutes of model time; a text
+        # request keeps the timeout it has always had.
+        timeout=120.0 if is_text_only else 300.0,
     )
     response.raise_for_status()
     data = response.json()
     return data["choices"][0]["message"]["content"]
+
+
+def _gemini_parts(parts: list[PromptPart]) -> list:
+    return [
+        genai_types.Part.from_text(text=part)
+        if isinstance(part, str)
+        else genai_types.Part.from_bytes(data=part.data, mime_type=part.mime_type)
+        for part in parts
+    ]
+
+
+def _openai_content(parts: list[PromptPart]) -> list[dict]:
+    content: list[dict] = []
+    for part in parts:
+        if isinstance(part, str):
+            content.append({"type": "text", "text": part})
+            continue
+        encoded = base64.b64encode(part.data).decode("ascii")
+        content.append({"type": "image_url", "image_url": {"url": f"data:{part.mime_type};base64,{encoded}"}})
+    return content

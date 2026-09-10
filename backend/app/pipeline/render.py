@@ -20,7 +20,7 @@ from app.core.ffmpeg_utils import ffmpeg_path
 from app.pipeline.reframe.models import CropWindow, ReframePlan
 
 
-def _interpolated_window(windows: list[CropWindow], timestamp: float) -> CropWindow:
+def interpolated_window(windows: list[CropWindow], timestamp: float) -> CropWindow:
     if len(windows) == 1 or timestamp <= windows[0].time:
         return windows[0]
     if timestamp >= windows[-1].time:
@@ -58,7 +58,7 @@ def render(video_path: str, plan: ReframePlan, output_path: str, target_width: i
             if not ok:
                 break
             timestamp = frame_index / fps
-            window = _interpolated_window(windows, timestamp)
+            window = interpolated_window(windows, timestamp)
             cropped = frame[window.y : window.y + window.height, window.x : window.x + window.width]
             resized = cv2.resize(cropped, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
             writer.write(resized)

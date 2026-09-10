@@ -29,6 +29,7 @@ $ErrorActionPreference = "Stop"
   --hidden-import app.api.social_kit `
   --hidden-import app.api.system `
   --hidden-import app.api.youtube `
+  --hidden-import app.api.recipe `
   run_server.py
 
 $triple = (rustc -vV | Select-String "^host:").ToString().Split(" ")[1]

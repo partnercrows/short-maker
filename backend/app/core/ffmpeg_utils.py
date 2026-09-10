@@ -5,12 +5,15 @@ own `shutil.which` + `subprocess.run` pair.
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import shutil
 import subprocess
+import threading
 from functools import lru_cache
 from pathlib import Path
+from typing import Iterable
 
 # On this class of Windows setup, whether ffmpeg/ffprobe are actually on PATH
 # depends entirely on which shell/session launched the sidecar -- a WinGet
@@ -254,3 +257,114 @@ def cut_subclip(video_path: str, start: float, duration: float, output_path: str
             output_path,
         ],
     )
+
+
+def has_audio_stream(path: str) -> bool:
+    """Whether the file carries any audio at all.
+
+    Recipe Clipper concatenates scenes with stream copy, and that requires
+    every segment to have the same streams -- a silent segment has to get a
+    synthesised track rather than no track, or the join fails."""
+    result = _run(
+        [ffprobe_path(), "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "json", path],
+        text=True,
+    )
+    return bool(json.loads(result.stdout).get("streams"))
+
+
+def extract_frame_sequence(
+    video_path: str,
+    output_dir: str,
+    interval_seconds: float,
+    width: int = 512,
+    quality: int = 5,
+) -> list[Path]:
+    """Decodes the video once, writing one downscaled JPEG every
+    `interval_seconds`. Frame N (1-indexed) is the picture at
+    t = (N-1) * interval_seconds.
+
+    Recipe Clipper needs to look at a two-hour video without decoding it
+    repeatedly; this is the single pass everything else is derived from.
+    """
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    for stale in directory.glob("probe_*.jpg"):
+        stale.unlink(missing_ok=True)
+
+    _run(
+        [
+            ffmpeg_path(),
+            "-y",
+            "-i",
+            video_path,
+            "-an",
+            "-sn",
+            "-vf",
+            f"fps=1/{interval_seconds:.6f},scale={width}:-2",
+            "-q:v",
+            str(quality),
+            str(directory / "probe_%06d.jpg"),
+        ]
+    )
+    return sorted(directory.glob("probe_*.jpg"))
+
+
+def run_with_frame_pipe(cmd: list[str], frames: Iterable[bytes]) -> None:
+    """Feeds raw frames into ffmpeg's stdin.
+
+    Writing gigabytes of raw video into a pipe deadlocks the moment ffmpeg's
+    stderr pipe fills and nobody drains it, so stderr is drained on its own
+    thread throughout -- and its tail is what the error carries, same as
+    `_run`.
+    """
+    process = subprocess.Popen(  # noqa: S603 -- our own argv, no shell
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    tail: collections.deque[str] = collections.deque(maxlen=60)
+
+    def drain() -> None:
+        assert process.stderr is not None
+        for line in process.stderr:
+            tail.append(line.decode("utf-8", "replace").rstrip())
+
+    drainer = threading.Thread(target=drain, daemon=True)
+    drainer.start()
+    try:
+        assert process.stdin is not None
+        for frame in frames:
+            process.stdin.write(frame)
+    except BrokenPipeError:
+        pass  # ffmpeg died early; the real reason is in stderr, reported below
+    finally:
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except BrokenPipeError:
+                pass
+        returncode = process.wait()
+        drainer.join(timeout=5)
+
+    if returncode != 0:
+        raise FfmpegError(f"{Path(cmd[0]).stem} failed (exit {returncode}): {_stderr_tail(chr(10).join(tail))}")
+
+
+def concat_videos(concat_file: str, output_path: str, *, audio_filter: str | None = None, mute: bool = False) -> None:
+    """Joins pre-rendered, uniformly encoded segments listed in a concat file.
+
+    The video is stream-copied: every scene was encoded once when it was
+    rendered, and changing the audio or the running order must not cost
+    another encode (PRD S28).
+    """
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    cmd = [ffmpeg_path(), "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c:v", "copy"]
+    if mute:
+        cmd += ["-an"]
+    elif audio_filter:
+        cmd += ["-af", audio_filter, "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"]
+    else:
+        cmd += ["-c:a", "copy"]
+    cmd += ["-movflags", "+faststart", output_path]
+    _run(cmd)
