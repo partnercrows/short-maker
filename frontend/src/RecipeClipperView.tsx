@@ -8,6 +8,7 @@ import SocialKitPanel from "./SocialKitPanel";
 import {
   analyzeRecipe,
   cancelJob,
+  copyClipTo,
   createProject,
   generateRecipeVideo,
   getRecipe,
@@ -101,6 +102,7 @@ export default function RecipeClipperView({ settings, openProject, onOpenSetting
   const [generateJob, setGenerateJob] = useState<Job | null>(null);
   const [generating, setGenerating] = useState(false);
   const [showSocialKit, setShowSocialKit] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
   const step1Valid = name.trim() !== "" && videoPath.trim() !== "";
@@ -244,6 +246,28 @@ export default function RecipeClipperView({ settings, openProject, onOpenSetting
       setError(String(e));
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleDownload() {
+    if (!recipe?.clip) return;
+    setError(null);
+    try {
+      const folder = await open({ multiple: false, directory: true });
+      if (typeof folder !== "string") return;
+      setDownloadStatus("saving");
+      const job = await copyClipTo(recipe.clip.id, folder);
+      const finished = await pollJob(job.id, () => {});
+      if (finished.status === "completed") {
+        setDownloadStatus("done");
+        setTimeout(() => setDownloadStatus("idle"), 2000);
+      } else {
+        setDownloadStatus("error");
+        setError(finished.error ?? "");
+      }
+    } catch (e) {
+      setDownloadStatus("error");
+      setError(String(e));
     }
   }
 
@@ -481,6 +505,19 @@ export default function RecipeClipperView({ settings, openProject, onOpenSetting
                   >
                     {generating ? t(lang, "recipe_generating") : t(lang, "recipe_generate")}
                   </button>
+                  {videoSrc && (
+                    <button
+                      className="rounded border border-purple-600 px-4 py-1.5 text-sm font-medium text-purple-600 hover:bg-purple-50 disabled:opacity-40 dark:text-purple-400 dark:hover:bg-purple-950/40"
+                      disabled={downloadStatus === "saving"}
+                      onClick={handleDownload}
+                    >
+                      {downloadStatus === "saving"
+                        ? t(lang, "downloading")
+                        : downloadStatus === "done"
+                          ? t(lang, "download_done")
+                          : t(lang, "download")}
+                    </button>
+                  )}
                   {recipe.clip && (
                     <button
                       className={`rounded border px-3 py-1.5 text-sm ${

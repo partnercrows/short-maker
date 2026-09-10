@@ -116,3 +116,12 @@ def test_export_clip_to_folder_composites_when_intro_enabled_and_image_present(t
 
     assert result.read_bytes() == b"composited"
     assert calls["args"] == (image, video, 1.5)
+
+
+def test_a_recipe_video_is_named_after_the_dish_not_its_uuid():
+    clip = {
+        "id": "9d0f4d1e-0000-0000-0000-000000000000",
+        "analysis_json": json.dumps({"recipe_name": "Ayam Kecap", "scenes": []}),
+    }
+
+    assert clip_base_name(clip) == "Ayam Kecap"

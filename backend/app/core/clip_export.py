@@ -32,10 +32,16 @@ def safe_filename(name: str) -> str:
 
 
 def clip_base_name(clip) -> str:
+    """What the exported file is called.
+
+    An AI Clipper clip carries a suggested title; a Recipe Clipper video
+    carries the dish it detected. Either beats handing the user a uuid.mp4.
+    """
     base_name = clip["id"]
     if clip["analysis_json"]:
         try:
-            base_name = json.loads(clip["analysis_json"]).get("suggested_title") or base_name
+            analysis = json.loads(clip["analysis_json"])
+            base_name = analysis.get("suggested_title") or analysis.get("recipe_name") or base_name
         except json.JSONDecodeError:
             pass
     return safe_filename(base_name)
