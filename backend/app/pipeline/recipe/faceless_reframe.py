@@ -448,3 +448,45 @@ def _committed_holds(buckets: list[tuple[float, float]], trigger: float) -> list
 
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value)) if high >= low else low
+
+
+# Two scenes cut from the same fixed camera get their framing chosen
+# independently, so a crop at x=300 followed by one at x=340 shifts the whole
+# background sideways at the cut. With different shots the cut hides it; with
+# the same worktop behind both -- one bowl, then the next bowl -- the eye
+# reads it as a judder rather than an edit.
+FRAMING_ALIGN_FRACTION = 0.10
+
+
+def align_adjacent_plans(plans: list[ReframePlan | None], source_width: int, source_height: int) -> None:
+    """Snaps near-identical framings on consecutive scenes to one position.
+
+    Only still framings take part: a scene that pans is telling the viewer
+    the camera is moving, so there is nothing to hide. Modifies in place.
+    """
+    tolerance_x = FRAMING_ALIGN_FRACTION * source_width
+    tolerance_y = FRAMING_ALIGN_FRACTION * source_height
+
+    run: list[ReframePlan] = []
+    for plan in [*plans, None]:
+        still = plan if plan is not None and len(plan.windows) == 1 else None
+        if still is not None and (not run or _close_enough(run[-1].windows[0], still.windows[0], tolerance_x, tolerance_y)):
+            run.append(still)
+            continue
+        _settle(run)
+        run = [still] if still is not None else []
+    _settle(run)
+
+
+def _close_enough(a: CropWindow, b: CropWindow, tolerance_x: float, tolerance_y: float) -> bool:
+    return abs(a.x - b.x) <= tolerance_x and abs(a.y - b.y) <= tolerance_y and (a.width, a.height) == (b.width, b.height)
+
+
+def _settle(run: list[ReframePlan]) -> None:
+    if len(run) < 2:
+        return
+    x = int(round(float(np.median([plan.windows[0].x for plan in run]))))
+    y = int(round(float(np.median([plan.windows[0].y for plan in run]))))
+    for plan in run:
+        window = plan.windows[0]
+        plan.windows[0] = window.model_copy(update={"x": x, "y": y})

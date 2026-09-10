@@ -219,3 +219,59 @@ def test_a_single_brief_excursion_is_ignored():
     plan = faceless_reframe.build_plan(_moving_scan(columns), TARGET_WIDTH, TARGET_HEIGHT)
 
     assert len(set(_x_positions(plan))) == 1
+
+
+# --- framing continuity between scenes --------------------------------------
+
+
+def _still_plan(x: int, y: int = 0):
+    from app.pipeline.reframe.models import CropWindow, ReframePlan
+
+    return ReframePlan(
+        mode_used=ReframeMode.FACELESS_COOKING, windows=[CropWindow(time=0.0, x=x, y=y, width=608, height=1080)]
+    )
+
+
+def test_near_identical_framings_on_neighbouring_scenes_are_snapped_together():
+    """One bowl then the next, same camera: a 40px shift at the cut reads as a
+    judder rather than an edit."""
+    plans = [_still_plan(300), _still_plan(340), _still_plan(320)]
+
+    faceless_reframe.align_adjacent_plans(plans, SOURCE_WIDTH, SOURCE_HEIGHT)
+
+    assert len({plan.windows[0].x for plan in plans}) == 1
+
+
+def test_genuinely_different_framings_are_left_alone():
+    """A cut to the other side of the kitchen is an edit, not a judder."""
+    plans = [_still_plan(100), _still_plan(1200)]
+
+    faceless_reframe.align_adjacent_plans(plans, SOURCE_WIDTH, SOURCE_HEIGHT)
+
+    assert [plan.windows[0].x for plan in plans] == [100, 1200]
+
+
+def test_a_panning_scene_breaks_the_run_and_keeps_its_own_movement():
+    from app.pipeline.reframe.models import CropWindow, ReframePlan
+
+    panning = ReframePlan(
+        mode_used=ReframeMode.FACELESS_COOKING,
+        windows=[
+            CropWindow(time=0.0, x=300, y=0, width=608, height=1080),
+            CropWindow(time=3.0, x=900, y=0, width=608, height=1080),
+        ],
+    )
+    plans = [_still_plan(300), panning, _still_plan(880), _still_plan(900)]
+
+    faceless_reframe.align_adjacent_plans(plans, SOURCE_WIDTH, SOURCE_HEIGHT)
+
+    assert [w.x for w in panning.windows] == [300, 900]  # untouched
+    assert plans[2].windows[0].x == plans[3].windows[0].x  # the pair after it settled
+
+
+def test_alignment_tolerates_scenes_with_no_plan_yet():
+    plans = [_still_plan(300), None, _still_plan(320)]
+
+    faceless_reframe.align_adjacent_plans(plans, SOURCE_WIDTH, SOURCE_HEIGHT)
+
+    assert plans[0].windows[0].x == 300 and plans[2].windows[0].x == 320

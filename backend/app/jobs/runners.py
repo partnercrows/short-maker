@@ -28,7 +28,15 @@ from app.jobs.manager import job_manager
 from app.pipeline.ai_analysis.clip_selector import select_clips
 from app.pipeline.intro import load_intro_frame
 from app.pipeline.recipe import assemble as recipe_assemble
-from app.pipeline.recipe import face_check, frame_sampler, recipe_analyzer, store, vision_capability, vision_labeler
+from app.pipeline.recipe import (
+    face_check,
+    faceless_reframe,
+    frame_sampler,
+    recipe_analyzer,
+    store,
+    vision_capability,
+    vision_labeler,
+)
 from app.pipeline.recipe.models import AudioMode, RecipeAnalysis, TargetDuration
 from app.pipeline.recipe.vision_capability import VisionUnsupportedError
 from app.pipeline.reframe.models import ReframeMode
@@ -108,6 +116,23 @@ def _usable_video_duration(source_video_path: str, container_duration: float | N
     return metadata.video_duration
 
 
+def _pick_transcriber(job_id: str, use_gpu: bool) -> tuple[object, str]:
+    """The transcriber to use, and a label saying which.
+
+    Whether the GPU is really doing the work is not something the user can
+    tell from a progress bar, and a silent fall back to CPU on a machine
+    that was reported as GPU-ready is exactly the kind of thing worth
+    saying out loud.
+    """
+    if not use_gpu:
+        return get_transcriber(), ""
+    try:
+        return get_transcriber("cuda", "float16"), " on GPU"
+    except Exception:  # noqa: BLE001 -- GPU requested but not usable; CPU still works
+        job_manager.update_progress(job_id, None, "GPU unavailable, falling back to CPU for transcription")
+        return get_transcriber(), " on CPU (GPU unavailable)"
+
+
 def run_analyze_job(
     job_id: str, project_id: str, provider: ProviderConfig, num_clips: int | None, use_gpu: bool = False
 ) -> None:
@@ -139,19 +164,16 @@ def run_analyze_job(
             _raise_if_cancelled(job_id)
 
             total_duration = project["source_duration"] or 0.0
-            job_manager.update_progress(job_id, 30, f"Transcribing (0:00 / {_format_mmss(total_duration)})")
+            transcriber, device_label = _pick_transcriber(job_id, use_gpu)
+            job_manager.update_progress(
+                job_id, 30, f"Transcribing{device_label} (0:00 / {_format_mmss(total_duration)})"
+            )
 
             def on_transcribe_progress(fraction: float) -> None:
                 _raise_if_cancelled(job_id)
                 elapsed = fraction * total_duration
-                step_label = f"Transcribing ({_format_mmss(elapsed)} / {_format_mmss(total_duration)})"
+                step_label = f"Transcribing{device_label} ({_format_mmss(elapsed)} / {_format_mmss(total_duration)})"
                 job_manager.update_progress(job_id, 30 + fraction * 30, step_label)
-
-            try:
-                transcriber = get_transcriber("cuda", "float16") if use_gpu else get_transcriber()
-            except Exception:  # noqa: BLE001 -- GPU requested but not actually usable; don't fail the whole job over it
-                job_manager.update_progress(job_id, 30, "GPU unavailable, falling back to CPU for transcription")
-                transcriber = get_transcriber()
 
             transcript = transcriber.transcribe(str(audio_path), on_progress=on_transcribe_progress)
             transcript_path.write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
@@ -624,17 +646,15 @@ def _recipe_transcript(job_id, project_id, source_video, video_duration, use_gpu
         return None
     _raise_if_cancelled(job_id)
 
+    transcriber, device_label = _pick_transcriber(job_id, use_gpu)
+
     def on_transcribe_progress(fraction: float) -> None:
         _raise_if_cancelled(job_id)
         elapsed = fraction * video_duration
-        step = f"Transcribing ({_format_mmss(elapsed)} / {_format_mmss(video_duration)})"
+        step = f"Transcribing{device_label} ({_format_mmss(elapsed)} / {_format_mmss(video_duration)})"
         job_manager.update_progress(job_id, 10 + fraction * 18, step)
 
-    job_manager.update_progress(job_id, 10, f"Transcribing (0:00 / {_format_mmss(video_duration)})")
-    try:
-        transcriber = get_transcriber("cuda", "float16") if use_gpu else get_transcriber()
-    except Exception:  # noqa: BLE001 -- GPU requested but unusable; CPU still works
-        transcriber = get_transcriber()
+    job_manager.update_progress(job_id, 10, f"Transcribing{device_label} (0:00 / {_format_mmss(video_duration)})")
     transcript = transcriber.transcribe(str(audio_path), on_progress=on_transcribe_progress)
     transcript_path.write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
     return transcript
@@ -729,6 +749,11 @@ def _prepare_scene_framing(job_id, project_id, clip_id, source_video, analysis: 
             segment_path.unlink(missing_ok=True)
         scene.plan = plan
         scene.face_check = check
+
+    # Neighbouring scenes shot from the same angle should not shift sideways
+    # at the cut between them.
+    metadata = probe_metadata(source_video)
+    faceless_reframe.align_adjacent_plans([scene.plan for scene in scenes], metadata.width, metadata.height)
     store.replace_scenes(clip_id, scenes)
 
 
