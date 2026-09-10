@@ -80,13 +80,20 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs = D
       },
     });
     if (!res.ok) {
-      throw new Error(await errorMessage(res));
+      throw new Error(await errorMessage(res, path));
     }
     if (res.status === 204) return undefined as T;
     return res.json();
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") {
       throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${path}`);
+    }
+    // The backend process is gone (crashed, still starting, killed by an
+    // installer). "error sending request" says nothing on its own.
+    if (e instanceof Error && /error sending request|Failed to fetch|Connection refused/i.test(e.message)) {
+      throw new Error(
+        `The backend is not responding (${path}). It may still be starting up or may have stopped -- restart the app and try again.`,
+      );
     }
     throw e;
   } finally {
@@ -98,14 +105,22 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs = D
 // to be read by the user (which model to switch to, which name is taken).
 // Showing it raw -- `409 Conflict: {"detail":"..."}` -- buried the sentence
 // that actually says what to do.
-async function errorMessage(res: Response): Promise<string> {
+async function errorMessage(res: Response, path = ""): Promise<string> {
   const body = await res.text();
+  let detail: unknown;
   try {
-    const detail = JSON.parse(body)?.detail;
-    if (typeof detail === "string" && detail.trim() !== "") return detail;
+    detail = JSON.parse(body)?.detail;
   } catch {
     // Not JSON -- fall through to the raw body.
   }
+  // FastAPI answers a route it does not have with exactly this, which reaches
+  // the user as a bare "Not Found" and explains nothing. In practice it means
+  // the running backend is older than the feature being used -- the sidecar
+  // is a separate binary, so a UI update alone does not bring new endpoints.
+  if (res.status === 404 && detail === "Not Found") {
+    return `This version of the backend does not have ${path}. Restart the app so it picks up the current backend (or rebuild the sidecar if you are running from source).`;
+  }
+  if (typeof detail === "string" && detail.trim() !== "") return detail;
   return `${res.status} ${res.statusText}: ${body}`;
 }
 
