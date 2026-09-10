@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import ProviderConfigFields from "./ProviderConfigFields";
 import RecipeGenerateDialog from "./RecipeGenerateDialog";
 import RecipeSummaryPanel from "./RecipeSummaryPanel";
 import RecipeTimeline from "./RecipeTimeline";
@@ -28,8 +27,10 @@ import type { AppSettings } from "./settings";
 
 interface Props {
   settings: AppSettings;
-  onSettingsChange: (next: AppSettings) => void;
   openProject: Project | null;
+  /** The AI provider is configured once, in Settings -- this step only needs
+   *  a way to send the user there when it has not been. */
+  onOpenSettings: () => void;
 }
 
 const STEPS_KEY: TranslationKey[] = ["recipe_step_project", "recipe_step_analyze", "recipe_step_timeline"];
@@ -74,7 +75,7 @@ function StepBar({ current, language }: { current: number; language: Language })
   );
 }
 
-export default function RecipeClipperView({ settings, onSettingsChange, openProject }: Props) {
+export default function RecipeClipperView({ settings, openProject, onOpenSettings }: Props) {
   const lang = settings.language;
   const [step, setStep] = useState(1);
   const [name, setName] = useState("Resep Baru");
@@ -87,8 +88,6 @@ export default function RecipeClipperView({ settings, onSettingsChange, openProj
     provider.apiKey.trim() !== "" &&
     provider.model.trim() !== "" &&
     (provider.providerType !== "custom" || provider.baseUrl.trim() !== "");
-  const [editingProvider, setEditingProvider] = useState(!isProviderConfigured);
-
   const [target, setTarget] = useState<RecipeTargetDuration>("1min");
   const [faceless, setFaceless] = useState(true);
 
@@ -318,30 +317,17 @@ export default function RecipeClipperView({ settings, onSettingsChange, openProj
             {project.name} ({project.source_duration?.toFixed(0)}s, {project.source_resolution})
           </div>
 
-          {isProviderConfigured && !editingProvider ? (
-            <div className="flex items-center justify-between rounded border border-green-200 bg-green-50 p-3 text-sm dark:border-green-900 dark:bg-green-950">
-              <div>
-                <div className="font-medium text-green-700 dark:text-green-400">✓ {t(lang, "provider_configured")}</div>
-                <div className="text-xs text-neutral-500">
-                  {provider.providerType === "custom" ? "Custom" : provider.providerType} · {provider.model}
-                </div>
-              </div>
+          {!isProviderConfigured && (
+            <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <div>{t(lang, "recipe_provider_missing")}</div>
               <button
                 type="button"
-                className="text-sm text-purple-600 hover:underline disabled:opacity-50 dark:text-purple-400"
-                onClick={() => setEditingProvider(true)}
-                disabled={analyzing}
+                className="mt-2 rounded border border-amber-400 px-3 py-1.5 text-sm hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900"
+                onClick={onOpenSettings}
               >
-                {t(lang, "change_provider")}
+                {t(lang, "recipe_open_settings")}
               </button>
             </div>
-          ) : (
-            <ProviderConfigFields
-              lang={lang}
-              value={provider}
-              disabled={analyzing}
-              onChange={(next) => onSettingsChange({ ...settings, provider: next })}
-            />
           )}
 
           <div>
@@ -366,6 +352,16 @@ export default function RecipeClipperView({ settings, onSettingsChange, openProj
             </div>
             <p className="mt-1 text-xs text-neutral-500">{t(lang, "recipe_target_hint")}</p>
           </div>
+
+          {isProviderConfigured && (
+            <p className="text-xs text-neutral-500">
+              {t(lang, "recipe_provider_note")}: {provider.providerType === "custom" ? "Custom" : provider.providerType}{" "}
+              · {provider.model}{" "}
+              <button type="button" className="text-purple-600 hover:underline dark:text-purple-400" onClick={onOpenSettings}>
+                {t(lang, "recipe_change_in_settings")}
+              </button>
+            </p>
+          )}
 
           <label className="flex items-start gap-2 rounded border border-neutral-200 p-3 text-sm dark:border-neutral-800">
             <input

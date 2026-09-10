@@ -169,6 +169,13 @@ const dict = {
     id: "AI boleh sedikit melewati target bila ada langkah penting yang akan hilang.",
     en: "The AI may run slightly over target if a step would otherwise be lost.",
   },
+  recipe_provider_missing: {
+    id: "Provider AI belum diatur. Atur sekali di Pengaturan, lalu kembali ke sini.",
+    en: "No AI provider is set up yet. Set it once in Settings, then come back here.",
+  },
+  recipe_open_settings: { id: "Buka Pengaturan", en: "Open Settings" },
+  recipe_provider_note: { id: "AI yang dipakai", en: "Using" },
+  recipe_change_in_settings: { id: "ubah di Pengaturan", en: "change in Settings" },
   recipe_faceless: { id: "Mode tanpa wajah", en: "Faceless mode" },
   recipe_faceless_hint: {
     id: "Framing mengikuti masakan, tangan dan wajan, dan berusaha menjaga wajah tetap di luar frame.",

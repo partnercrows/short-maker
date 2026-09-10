@@ -125,8 +125,8 @@ function App() {
           <RecipeClipperView
             key={`recipe-${clipperGeneration}`}
             settings={settings}
-            onSettingsChange={handleSettingsChange}
             openProject={openProject?.mode === "recipe" ? openProject : null}
+            onOpenSettings={() => setView("settings")}
           />
         </div>
         {view === "history" && (
