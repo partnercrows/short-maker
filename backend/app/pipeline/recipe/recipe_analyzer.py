@@ -38,6 +38,27 @@ INGREDIENT_CONFIDENCE_FLOOR = 60
 # dish. Anything earlier is just a scene out of order (PRD S11).
 HOOK_MIN_POSITION = 0.7
 _TRANSCRIPT_CHAR_BUDGET = 30000
+# Two scenes covering the same seconds are the same footage twice. Beyond this
+# much shared time the later one is a duplicate, not a second look.
+OVERLAP_DROP_RATIO = 0.5
+# A stretch of source this large with cooking in it and no scene covering it is
+# a missing step, not an edit.
+COVERAGE_GAP_FRACTION = 0.12
+MIN_GAP_LABELS = 2
+# "Auto" aims for a share of the source rather than a fixed minute: a
+# four-minute recipe condensed to 37 seconds loses steps that a four-minute
+# recipe does not need to lose.
+AUTO_TARGET_SHARE = 0.3
+AUTO_TARGET_MIN = 45.0
+AUTO_TARGET_MAX = 120.0
+
+
+def auto_target_seconds(video_duration: float) -> float:
+    return max(AUTO_TARGET_MIN, min(AUTO_TARGET_MAX, video_duration * AUTO_TARGET_SHARE))
+
+
+def target_seconds_for(target: TargetDuration, video_duration: float) -> float:
+    return target.seconds if target.seconds is not None else auto_target_seconds(video_duration)
 
 _SYSTEM_PROMPT = """You are editing one long cooking video down to a single short vertical video that \
 tells the whole cooking story.
@@ -87,7 +108,7 @@ def analyze_recipe(
 ) -> RecipeAnalysis:
     language = detect_language(transcript)
     system_prompt = _SYSTEM_PROMPT.format(
-        target=_target_phrase(target_duration),
+        target=_target_phrase(target_duration, video_duration),
         language="Indonesian" if language == "id" else "the same language as the transcript",
         labels=" | ".join(SCENE_LABELS),
     )
@@ -108,9 +129,13 @@ def analyze_recipe(
         visual_analysis="ok" if labels else "unavailable",
     )
     analysis.scenes = _build_scenes(parsed.get("scenes") or [], video_duration, segments)
+    analysis.scenes = _drop_overlapping_scenes(analysis.scenes)
+    analysis.warnings.extend(
+        _fill_coverage_gaps(analysis, labels, target_seconds_for(target_duration, video_duration), video_duration)
+    )
     _apply_ingredient_gate(analysis, parsed.get("ingredients") or [], labels)
     _attach_alternatives(analysis, labels)
-    analysis.warnings.extend(check_duration_fit(analysis, target_duration))
+    analysis.warnings.extend(check_duration_fit(analysis, target_duration, video_duration))
     return analysis
 
 
@@ -127,10 +152,10 @@ def detect_language(transcript: TranscriptResult | None) -> str:
     return "en" if en_hits > id_hits else "id"
 
 
-def _target_phrase(target: TargetDuration) -> str:
-    seconds = target.seconds
-    if seconds is None:
-        return "whatever length the recipe genuinely needs, usually between 60 and 120 seconds"
+def _target_phrase(target: TargetDuration, video_duration: float) -> str:
+    seconds = target_seconds_for(target, video_duration)
+    if target.seconds is None:
+        return f"{int(seconds)} seconds -- this source is {int(video_duration)} seconds long, so keep every step"
     return f"{int(seconds)} seconds"
 
 
@@ -328,7 +353,132 @@ def _attach_alternatives(analysis: RecipeAnalysis, labels: list[FrameLabel], per
         ]
 
 
-def check_duration_fit(analysis: RecipeAnalysis, target: TargetDuration) -> list[str]:
+def _drop_overlapping_scenes(scenes: list[RecipeScene]) -> list[RecipeScene]:
+    """Two scenes covering the same seconds show the viewer one clip twice.
+
+    Seen in practice: three consecutive scenes all cut from 254-258s, with
+    three different voice-over lines over the same four seconds, which reads
+    as the video ending abruptly. The later scene is trimmed to start where
+    the earlier one ends, or dropped when almost nothing distinct is left.
+
+    The opening hook is exempt: the PRD deliberately shows the finished dish
+    twice, once as a 2-4 second hook and again at the end.
+    """
+    kept: list[RecipeScene] = []
+    for scene in scenes:
+        if scene.is_hook:
+            kept.append(scene)
+            continue
+        previous = next((s for s in reversed(kept) if not s.is_hook), None)
+        if previous is None or scene.source_start >= previous.source_end:
+            kept.append(scene)
+            continue
+
+        shared = min(previous.source_end, scene.source_end) - scene.source_start
+        shortest = min(previous.duration, scene.duration) or 1.0
+        if shared / shortest > OVERLAP_DROP_RATIO:
+            continue  # the same moment again
+
+        low, _high = duration_range_for(scene.label, is_hook=False)
+        trimmed_start = previous.source_end
+        if scene.source_end - trimmed_start < low * 0.6:
+            continue
+        scene.source_start = round(trimmed_start, 2)
+        kept.append(scene)
+
+    for position, scene in enumerate(kept):
+        scene.order = position
+    return kept
+
+
+def _fill_coverage_gaps(
+    analysis: RecipeAnalysis, labels: list[FrameLabel], target_seconds: float, video_duration: float
+) -> list[str]:
+    """Puts back steps the model skipped over, while there is room for them.
+
+    A long stretch of source with cooking in it and no scene covering it is
+    how a recipe ends up jumping from mixing to finished. Rather than only
+    warning about it, the biggest uncovered moment in each gap is added --
+    but only while the timeline is still under target, so this can never
+    bloat a video past the length that was asked for.
+    """
+    if not labels or video_duration <= 0 or not analysis.scenes:
+        # No scenes at all is the model failing, not a gap in an otherwise
+        # sound timeline; the job reports that rather than papering over it.
+        return []
+
+    gap_seconds = max(20.0, COVERAGE_GAP_FRACTION * video_duration)
+    warnings: list[str] = []
+
+    for _ in range(6):  # bounded: each pass fills at most one gap
+        scenes = sorted(analysis.scenes, key=lambda s: s.source_start)
+        covered = [(s.source_start, s.source_end) for s in scenes if not s.is_hook]
+        gaps = _uncovered_ranges(covered, video_duration, gap_seconds)
+        if not gaps:
+            break
+
+        candidate = _best_label_in_gaps(labels, gaps)
+        if candidate is None:
+            break
+        if analysis.estimated_duration >= target_seconds:
+            start, end = gaps[0]
+            warnings.append(
+                f"Cooking steps between {_mmss(start)} and {_mmss(end)} were left out to stay near the target "
+                "length. Choose a longer target, or add them from the timeline."
+            )
+            break
+
+        low, high = duration_range_for(candidate.label)
+        length = min(high, max(low, (low + high) / 2))
+        start = max(0.0, min(candidate.time - length / 2, video_duration - length))
+        analysis.scenes.append(
+            RecipeScene(
+                scene_id=str(uuid.uuid4()),
+                order=0,
+                label=candidate.label,
+                title=candidate.label.replace("_", " ").title(),
+                source_start=round(start, 2),
+                source_end=round(start + length, 2),
+                vo_guide=candidate.subject or candidate.label.replace("_", " ").lower(),
+                on_screen_text=candidate.label.replace("_", " ").title(),
+                reason="Added to cover a cooking step the first pass skipped over.",
+            )
+        )
+        analysis.scenes = _enforce_chronology(analysis.scenes, video_duration)
+        analysis.scenes = _drop_overlapping_scenes(analysis.scenes)
+
+    return warnings
+
+
+def _uncovered_ranges(
+    covered: list[tuple[float, float]], video_duration: float, gap_seconds: float
+) -> list[tuple[float, float]]:
+    gaps: list[tuple[float, float]] = []
+    position = 0.0
+    for start, end in covered:
+        if start - position >= gap_seconds:
+            gaps.append((position, start))
+        position = max(position, end)
+    if video_duration - position >= gap_seconds:
+        gaps.append((position, video_duration))
+    return gaps
+
+
+def _best_label_in_gaps(labels: list[FrameLabel], gaps: list[tuple[float, float]]) -> FrameLabel | None:
+    """The most convincing cooking moment inside any uncovered stretch."""
+    inside = [
+        label
+        for label in labels
+        if label.label != "OTHER"
+        and label.confidence >= 50
+        and any(start <= label.time <= end for start, end in gaps)
+    ]
+    if not inside:
+        return None
+    return max(inside, key=lambda label: (label.action_strength, label.confidence))
+
+
+def check_duration_fit(analysis: RecipeAnalysis, target: TargetDuration, video_duration: float = 0.0) -> list[str]:
     """Say so when the recipe does not fit the requested length, instead of
     quietly dropping steps (PRD S44)."""
     warnings: list[str] = []

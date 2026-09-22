@@ -52,10 +52,22 @@ def _scene(label: str, start: float, end: float, **extra) -> dict:
     return scene
 
 
-def _analyze(monkeypatch, raw: str, video_duration: float = 3600.0, target=TargetDuration.ONE_MINUTE) -> RecipeAnalysis:
+def _analyze(
+    monkeypatch,
+    raw: str,
+    video_duration: float = 3600.0,
+    target=TargetDuration.ONE_MINUTE,
+    labels: list[FrameLabel] | None = None,
+) -> RecipeAnalysis:
+    """`labels=[]` opts out of gap-filling, for tests about something else."""
     monkeypatch.setattr(recipe_analyzer, "complete_chat", lambda *a, **k: raw)
     return recipe_analyzer.analyze_recipe(
-        _PROVIDER, _labels(), _transcript(), target, [], video_duration=video_duration
+        _PROVIDER,
+        _labels() if labels is None else labels,
+        _transcript(),
+        target,
+        [],
+        video_duration=video_duration,
     )
 
 
@@ -63,7 +75,7 @@ def test_scenes_are_forced_into_chronological_order(monkeypatch):
     """A shuffled highlight reel is fine; a shuffled cooking video is not (PRD S11)."""
     raw = _response([_scene("PLATING", 1800, 1806), _scene("CUTTING", 200, 206), _scene("SAUTEING", 900, 908)])
 
-    analysis = _analyze(monkeypatch, raw)
+    analysis = _analyze(monkeypatch, raw, labels=[])
 
     assert [scene.label for scene in analysis.scenes] == ["CUTTING", "SAUTEING", "PLATING"]
     assert [scene.order for scene in analysis.scenes] == [0, 1, 2]
@@ -74,7 +86,7 @@ def test_final_dish_hook_may_open_out_of_order(monkeypatch):
         [_scene("FINAL_DISH", 3400, 3404, is_hook=True), _scene("CUTTING", 200, 206), _scene("PLATING", 1800, 1806)]
     )
 
-    analysis = _analyze(monkeypatch, raw)
+    analysis = _analyze(monkeypatch, raw, labels=[])
 
     assert analysis.scenes[0].is_hook and analysis.scenes[0].label == "FINAL_DISH"
     assert [scene.label for scene in analysis.scenes[1:]] == ["CUTTING", "PLATING"]
@@ -84,7 +96,7 @@ def test_a_hook_taken_from_the_middle_is_treated_as_an_ordinary_scene(monkeypatc
     """Only the finished dish earns the out-of-order slot."""
     raw = _response([_scene("SAUTEING", 900, 908, is_hook=True), _scene("CUTTING", 200, 206)])
 
-    analysis = _analyze(monkeypatch, raw)
+    analysis = _analyze(monkeypatch, raw, labels=[])
 
     assert [scene.label for scene in analysis.scenes] == ["CUTTING", "SAUTEING"]
     assert not any(scene.is_hook for scene in analysis.scenes)
@@ -98,7 +110,7 @@ def test_scene_durations_are_clamped_to_the_budget_for_their_kind(monkeypatch):
         ]
     )
 
-    analysis = _analyze(monkeypatch, raw)
+    analysis = _analyze(monkeypatch, raw, labels=[])
 
     hook, cutting = analysis.scenes
     assert 2.0 <= hook.duration <= 4.0
@@ -112,7 +124,7 @@ def test_uncertain_ingredients_are_demoted_and_scrubbed_from_the_voice_over(monk
         ingredients=[{"name": "ayam", "confidence": 95}, {"name": "kecap manis", "confidence": 30}],
     )
 
-    analysis = _analyze(monkeypatch, raw)
+    analysis = _analyze(monkeypatch, raw, labels=[])
 
     assert [i.name for i in analysis.ingredients] == ["ayam"]
     assert analysis.possible_ingredients == ["kecap manis"]
@@ -148,7 +160,7 @@ def test_language_follows_the_transcript_and_falls_back_to_indonesian():
 
 def test_vo_script_and_text_guide_are_timed_against_the_output(monkeypatch):
     raw = _response([_scene("CUTTING", 200, 206), _scene("PLATING", 1800, 1806)])
-    analysis = _analyze(monkeypatch, raw)
+    analysis = _analyze(monkeypatch, raw, labels=[])
 
     script = recipe_analyzer.build_full_vo_script(analysis)
     guide = recipe_analyzer.build_text_guide(analysis)
@@ -160,7 +172,7 @@ def test_vo_script_and_text_guide_are_timed_against_the_output(monkeypatch):
 
 def test_disabled_scenes_are_left_out_of_the_script(monkeypatch):
     raw = _response([_scene("CUTTING", 200, 206), _scene("PLATING", 1800, 1806)])
-    analysis = _analyze(monkeypatch, raw)
+    analysis = _analyze(monkeypatch, raw, labels=[])
     kept = [analysis.scenes[1]]
 
     script = recipe_analyzer.build_full_vo_script(analysis, kept)
@@ -194,3 +206,84 @@ def test_cut_points_snap_to_a_nearby_shot_boundary(monkeypatch):
     )
 
     assert analysis.scenes[0].source_start == pytest.approx(198.0)
+
+
+# --- keeping the story whole -------------------------------------------------
+
+
+def test_scenes_cut_from_the_same_moment_are_not_repeated(monkeypatch):
+    """Straight from a real run: three scenes all cut from 254-258s, with
+    three different narration lines over the same four seconds, which made the
+    video look like it ended abruptly."""
+    raw = _response(
+        [
+            _scene("STIRRING", 243, 248),
+            _scene("PREPARATION", 254, 258),
+            _scene("PREPARATION", 254, 258),
+            _scene("FINAL_DISH", 255, 258),
+        ]
+    )
+
+    analysis = _analyze(monkeypatch, raw, video_duration=258.0, labels=[])
+
+    ranges = [(s.source_start, s.source_end) for s in analysis.scenes]
+    assert len(ranges) == len(set(ranges)), f"duplicate footage in {ranges}"
+    for earlier, later in zip(analysis.scenes, analysis.scenes[1:]):
+        assert later.source_start >= earlier.source_end, "scenes still overlap"
+
+
+def test_the_opening_hook_may_still_reuse_the_final_dish(monkeypatch):
+    """PRD S11 deliberately shows the finished dish twice."""
+    raw = _response(
+        [_scene("FINAL_DISH", 3400, 3404, is_hook=True), _scene("CUTTING", 200, 206), _scene("FINAL_DISH", 3400, 3406)]
+    )
+
+    analysis = _analyze(monkeypatch, raw, labels=[])
+
+    assert len(analysis.scenes) == 3
+    assert analysis.scenes[0].is_hook
+
+
+def test_a_skipped_stretch_of_cooking_is_put_back(monkeypatch):
+    """The 'suddenly finished' complaint: the model jumped from 206s to the
+    end, leaving the whole middle of the cook out."""
+    raw = _response([_scene("CUTTING", 200, 206)])
+    labels = [
+        FrameLabel(index=1, time=900.0, label="SAUTEING", confidence=90, action_strength=80, subject="onions"),
+        FrameLabel(index=2, time=1800.0, label="SIMMERING", confidence=85, action_strength=70, subject="the pot"),
+    ]
+
+    analysis = _analyze(monkeypatch, raw, labels=labels)
+
+    covered = [s.label for s in analysis.scenes]
+    assert "SAUTEING" in covered and "SIMMERING" in covered
+    assert analysis.scenes == sorted(analysis.scenes, key=lambda s: s.source_start)
+
+
+def test_gap_filling_stops_at_the_target_and_says_what_it_left_out(monkeypatch):
+    raw = _response([_scene("SAUTEING", 100, 112), _scene("FRYING", 200, 212), _scene("BOILING", 300, 312)])
+    labels = [
+        FrameLabel(index=i, time=600.0 + i * 300, label="STIRRING", confidence=90, action_strength=90)
+        for i in range(8)
+    ]
+
+    analysis = _analyze(monkeypatch, raw, target=TargetDuration.ONE_MINUTE, labels=labels)
+
+    assert analysis.estimated_duration <= 60 * 1.4
+    assert any("left out" in warning for warning in analysis.warnings)
+
+
+def test_no_scenes_at_all_is_reported_rather_than_filled_in(monkeypatch):
+    """An empty result means the model failed; inventing a timeline from
+    labels would hide that."""
+    analysis = _analyze(monkeypatch, _response([]))
+
+    assert analysis.scenes == []
+
+
+def test_auto_target_follows_the_length_of_the_source():
+    """A four-minute recipe condensed to 37 seconds loses steps it never
+    needed to lose."""
+    assert recipe_analyzer.auto_target_seconds(258.0) == pytest.approx(77.4)
+    assert recipe_analyzer.auto_target_seconds(60.0) == pytest.approx(45.0)  # floor
+    assert recipe_analyzer.auto_target_seconds(7200.0) == pytest.approx(120.0)  # ceiling
