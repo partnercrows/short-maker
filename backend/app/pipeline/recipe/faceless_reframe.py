@@ -23,6 +23,7 @@ import cv2
 import numpy as np
 
 from app.pipeline.common.face_detector import FaceBox, YuNetFaceDetector
+from app.pipeline.recipe.overlay_detect import OverlayBox, overlap_fraction
 from app.pipeline.reframe.center_crop import target_crop_size
 from app.pipeline.reframe.models import CropWindow, ReframeMode, ReframePlan
 from app.pipeline.reframe.smoothing import segment_hold_and_pan
@@ -40,6 +41,10 @@ FACE_DILATE = 0.35  # grow the box for hair, chin and neck
 # Every term below is a fraction in 0..1, so these weights mean what they say:
 # a window showing a whole face is worse than one containing all the motion.
 FACE_PENALTY = 1.5
+# A channel logo or caption burned into the source is worth avoiding about as
+# much as a face: it is the difference between a clean short and someone
+# else's branding in the corner of yours.
+OVERLAY_PENALTY = 1.2
 CENTER_BIAS = 0.2
 POSITION_STEP = 16
 MOTION_THRESHOLD = 12
@@ -182,6 +187,7 @@ def build_plan(
     zoom: float = 1.0,
     avoid_faces: bool = True,
     static: bool = False,
+    overlays: list[OverlayBox] | None = None,
 ) -> ReframePlan:
     """Pick a crop path over the scene: towards the action, away from faces."""
     source_width = scan_result.source_width
@@ -190,7 +196,7 @@ def build_plan(
     crop_width, crop_height = _crop_size(source_width, source_height, crop_height, target_width, target_height)
 
     positions = [
-        _best_position(sample, scan_result, crop_width, crop_height, avoid_faces=avoid_faces)
+        _best_position(sample, scan_result, crop_width, crop_height, avoid_faces=avoid_faces, overlays=overlays or [])
         for sample in scan_result.samples
     ]
     if not positions:
@@ -198,7 +204,9 @@ def build_plan(
         positions = [centered]
 
     if static:
-        x, y = _static_position(positions, scan_result, crop_width, crop_height, avoid_faces=avoid_faces)
+        x, y = _static_position(
+            positions, scan_result, crop_width, crop_height, avoid_faces=avoid_faces, overlays=overlays or []
+        )
         windows = [CropWindow(time=0.0, x=x, y=y, width=crop_width, height=crop_height)]
         return ReframePlan(mode_used=ReframeMode.FACELESS_COOKING, windows=windows)
 
@@ -254,6 +262,7 @@ def _best_position(
     crop_height: int,
     *,
     avoid_faces: bool,
+    overlays: list[OverlayBox] | None = None,
 ) -> tuple[int, int]:
     source_width = scan_result.source_width
     source_height = scan_result.source_height
@@ -278,6 +287,7 @@ def _best_position(
             reward = (reward_x + reward_y) / 2
             # How much of the most exposed face would be on screen, 0..1.
             penalty = FACE_PENALTY * _face_overlap(faces, x, y, crop_width, crop_height)
+            penalty += OVERLAY_PENALTY * overlap_fraction(overlays or [], x, y, crop_width, crop_height)
             # Distance from centre, 0..1. Not scaled by motion: in a shot
             # where nothing moves -- a plating hero shot -- this is the only
             # term left, and centring it is the right answer (PRD S16).
@@ -299,6 +309,7 @@ def _static_position(
     crop_height: int,
     *,
     avoid_faces: bool,
+    overlays: list[OverlayBox] | None = None,
 ) -> tuple[int, int]:
     """One fixed window for the whole scene: the position that keeps faces out
     for the longest. A still frame with no face beats a moving one with."""
@@ -315,7 +326,7 @@ def _static_position(
         reward = sum(
             _energy_in(sample.column_energy, x, crop_width, scan_result.source_width) for sample in scan_result.samples
         )
-        cost = overlap * 1000 - reward
+        cost = overlap * 1000 + overlap_fraction(overlays or [], x, y, crop_width, crop_height) * 800 - reward
         if cost < best_cost:
             best_cost = cost
             best = (x, y)

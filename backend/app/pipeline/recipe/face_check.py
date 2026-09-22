@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from app.pipeline.recipe.faceless_reframe import FacelessScan, _face_overlap, build_plan, scan
 from app.pipeline.recipe.models import SceneFaceCheck
+from app.pipeline.recipe.overlay_detect import OverlayBox
 from app.pipeline.reframe.models import ReframeMode, ReframePlan
 from app.pipeline.render import interpolated_window
 
@@ -47,6 +48,7 @@ def resolve_faceless(
     target_width: int,
     target_height: int,
     faceless: bool = True,
+    overlays: list[OverlayBox] | None = None,
 ) -> tuple[ReframePlan, SceneFaceCheck]:
     """Frame one already-cut scene, climbing the ladder until faces are out.
 
@@ -56,12 +58,13 @@ def resolve_faceless(
     scan_result = scan(video_path, detect_faces=faceless)
 
     if not faceless:
-        plan = build_plan(scan_result, target_width, target_height, avoid_faces=False)
+        # Faces are allowed back in; a stranger's watermark still is not.
+        plan = build_plan(scan_result, target_width, target_height, avoid_faces=False, overlays=overlays)
         return plan, SceneFaceCheck(status="clean", strategy_used="dynamic_crop")
 
     attempts: list[tuple[str, ReframePlan, float, float]] = []
     for zoom in _ZOOM_LADDER:
-        plan = build_plan(scan_result, target_width, target_height, zoom=zoom)
+        plan = build_plan(scan_result, target_width, target_height, zoom=zoom, overlays=overlays)
         worst, ratio = validate_plan(scan_result, plan)
         strategy = "dynamic_crop" if zoom == 1.0 else f"zoom_{zoom:g}"
         if _is_clean(worst, ratio):
@@ -73,7 +76,7 @@ def resolve_faceless(
 
     # A locked-off shot that avoids the face beats a moving one that doesn't.
     for zoom in _ZOOM_LADDER:
-        plan = build_plan(scan_result, target_width, target_height, zoom=zoom, static=True)
+        plan = build_plan(scan_result, target_width, target_height, zoom=zoom, static=True, overlays=overlays)
         worst, ratio = validate_plan(scan_result, plan)
         if _is_clean(worst, ratio):
             return plan, SceneFaceCheck(
