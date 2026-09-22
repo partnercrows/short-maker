@@ -42,6 +42,9 @@ function App() {
   // deleted -- the view keeps the loaded project/clips in its own state, and
   // that state points at files that no longer exist.
   const [clipperGeneration, setClipperGeneration] = useState(0);
+  // Separate from the clipper's: starting a new recipe must not tear down a
+  // clip that is still generating in the other view, and vice versa.
+  const [recipeGeneration, setRecipeGeneration] = useState(0);
   const [backendStatus, setBackendStatus] = useState<"loading" | "ready" | "error">("loading");
   const [backendError, setBackendError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
@@ -92,7 +95,16 @@ function App() {
     if (deleted === "all" || deleted.includes(openProject.id)) {
       setOpenProject(null);
       setClipperGeneration((n) => n + 1);
+      setRecipeGeneration((n) => n + 1);
     }
+  }
+
+  /** A finished project should not be a dead end. Remounting the view is the
+   *  honest reset: it clears the project, its clips and any job state with it. */
+  function handleStartOver(which: "clipper" | "recipe") {
+    setOpenProject(null);
+    if (which === "recipe") setRecipeGeneration((n) => n + 1);
+    else setClipperGeneration((n) => n + 1);
   }
 
   if (backendStatus !== "ready") {
@@ -117,16 +129,18 @@ function App() {
             settings={settings}
             onSettingsChange={handleSettingsChange}
             openProject={openProject?.mode === "recipe" ? null : openProject}
+            onStartOver={() => handleStartOver("clipper")}
           />
         </div>
         {/* Kept mounted for the same reason as the clipper: analysis and
             rendering are long jobs polled from inside the view. */}
         <div className={view === "recipe" ? "" : "hidden"}>
           <RecipeClipperView
-            key={`recipe-${clipperGeneration}`}
+            key={`recipe-${recipeGeneration}`}
             settings={settings}
             openProject={openProject?.mode === "recipe" ? openProject : null}
             onOpenSettings={() => setView("settings")}
+            onStartOver={() => handleStartOver("recipe")}
           />
         </div>
         {view === "history" && (

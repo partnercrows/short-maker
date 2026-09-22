@@ -32,12 +32,14 @@ from app.pipeline.recipe import (
     face_check,
     faceless_reframe,
     frame_sampler,
+    overlay_detect,
     recipe_analyzer,
     store,
     vision_capability,
     vision_labeler,
 )
-from app.pipeline.recipe.models import AudioMode, RecipeAnalysis, TargetDuration
+from app.pipeline.recipe.models import AudioMode, FramingMode, RecipeAnalysis, TargetDuration
+from app.pipeline.recipe.overlay_detect import OverlayBox
 from app.pipeline.recipe.vision_capability import VisionUnsupportedError
 from app.pipeline.reframe.models import ReframeMode
 from app.pipeline.reframe.modes import resolve as resolve_reframe
@@ -568,6 +570,9 @@ def run_recipe_analyze_job(
         target = TargetDuration(target_duration)
         video_duration = _usable_video_duration(source_video, project["source_duration"])
 
+        source_meta = probe_metadata(source_video)
+        metadata_width, metadata_height = source_meta.width, source_meta.height
+
         transcript = _recipe_transcript(job_id, project_id, source_video, video_duration, use_gpu)
         _raise_if_cancelled(job_id)
 
@@ -612,11 +617,22 @@ def run_recipe_analyze_job(
         recipe_analyzer.save_analysis(settings.recipe_analysis_path(project_id), analysis)
         _raise_if_cancelled(job_id)
 
+        job_manager.update_progress(job_id, 80, "Looking for watermarks to crop out")
+        overlays = overlay_detect.detect_static_overlays(probe_frames, metadata_width, metadata_height)
+        analysis.overlays = [dict(box) for box in (o.model_dump() for o in overlays)]
+        if overlays:
+            analysis.warnings.append(
+                f"Found {len(overlays)} burned-in graphic(s) in the source (a channel logo or caption). "
+                "Framing will try to keep them out of the crop."
+            )
+
+        recipe_analyzer.save_analysis(settings.recipe_analysis_path(project_id), analysis)
+
         job_manager.update_progress(job_id, 82, "Building recipe timeline")
         clip_id = store.ensure_recipe_clip(project_id, analysis.model_dump_json())
         store.replace_scenes(clip_id, analysis.scenes)
 
-        _prepare_scene_framing(job_id, project_id, clip_id, source_video, analysis, faceless)
+        _prepare_scene_framing(job_id, project_id, clip_id, source_video, analysis, faceless, overlays)
 
         job_manager.update_progress(job_id, 100, "Done")
         job_manager.complete(job_id)
@@ -719,7 +735,9 @@ def _model_switch_note(notes: list[str]):
     return note
 
 
-def _prepare_scene_framing(job_id, project_id, clip_id, source_video, analysis: RecipeAnalysis, faceless: bool) -> None:
+def _prepare_scene_framing(
+    job_id, project_id, clip_id, source_video, analysis: RecipeAnalysis, faceless: bool, overlays=None
+) -> None:
     """Work out each scene's 9:16 framing now, so the timeline can already
     say which scenes could not be kept faceless (PRD S17)."""
     settings = get_settings()
@@ -739,6 +757,7 @@ def _prepare_scene_framing(job_id, project_id, clip_id, source_video, analysis: 
                 target_width=TARGET_WIDTH,
                 target_height=TARGET_HEIGHT,
                 faceless=faceless,
+                overlays=overlays,
             )
         except Exception as exc:  # noqa: BLE001 -- a scene that won't scan still gets a usable crop
             metadata = probe_metadata(source_video)
@@ -763,6 +782,7 @@ def run_recipe_generate_job(
     audio_mode: str = "keep",
     volume_percent: int = 20,
     output_folder: str | None = None,
+    framing: str = "crop",
 ) -> None:
     """Render the approved timeline into one video.
 
@@ -788,6 +808,12 @@ def run_recipe_generate_job(
         clip_dir.mkdir(parents=True, exist_ok=True)
         final_path = clip_dir / "video.mp4"
 
+        # Framing may widen the crop, so the renderer needs to know what the
+        # framing was avoiding in the first place.
+        analysis = recipe_analyzer.load_analysis(settings.recipe_analysis_path(project_id))
+        overlays = [OverlayBox(**box) for box in (analysis.overlays if analysis else [])]
+        framing_mode = FramingMode(framing)
+
         with _render_slot(job_id):
             scene_paths = []
             for index, scene in enumerate(scenes):
@@ -807,6 +833,8 @@ def run_recipe_generate_job(
                     start=scene.source_start,
                     end=scene.source_end,
                     plan=plan,
+                    framing=framing_mode,
+                    overlays=overlays,
                 )
                 scene_paths.append(scene_path)
 

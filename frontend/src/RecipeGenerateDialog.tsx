@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { RecipeAudioMode } from "./api";
+import type { RecipeAudioMode, RecipeFramingMode } from "./api";
 import { t, type Language } from "./i18n";
 
 interface Props {
@@ -8,7 +8,7 @@ interface Props {
   faceless: boolean;
   busy: boolean;
   onCancel: () => void;
-  onGenerate: (audioMode: RecipeAudioMode, volumePercent: number) => void;
+  onGenerate: (audioMode: RecipeAudioMode, volumePercent: number, framing: RecipeFramingMode) => void;
 }
 
 /** Asked only once the timeline is approved (PRD S25): audio is a render-time
@@ -23,6 +23,13 @@ export default function RecipeGenerateDialog({
 }: Props) {
   const [audioMode, setAudioMode] = useState<RecipeAudioMode>("lower");
   const [volume, setVolume] = useState(20);
+  const [framing, setFraming] = useState<RecipeFramingMode>("crop");
+
+  const framings: { value: RecipeFramingMode; label: string; hint: string }[] = [
+    { value: "crop", label: t(lang, "recipe_framing_crop"), hint: t(lang, "recipe_framing_crop_hint") },
+    { value: "balanced", label: t(lang, "recipe_framing_balanced"), hint: t(lang, "recipe_framing_balanced_hint") },
+    { value: "fit", label: t(lang, "recipe_framing_fit"), hint: t(lang, "recipe_framing_fit_hint") },
+  ];
 
   const options: { value: RecipeAudioMode; label: string; hint?: string }[] = [
     { value: "keep", label: t(lang, "recipe_audio_keep") },
@@ -52,6 +59,31 @@ export default function RecipeGenerateDialog({
             <span className="text-neutral-500">{t(lang, "recipe_faceless")}</span>
             <span>{faceless ? "ON" : "OFF"}</span>
           </div>
+        </div>
+
+        <div className="mt-4">
+          <div className="mb-1 text-xs font-medium text-neutral-600 dark:text-neutral-400">
+            {t(lang, "recipe_framing")}
+          </div>
+          <div className="flex gap-2">
+            {framings.map((option) => (
+              <button
+                key={option.value}
+                className={`flex-1 rounded px-2 py-1.5 text-xs disabled:opacity-50 ${
+                  framing === option.value
+                    ? "bg-purple-600 text-white"
+                    : "border border-neutral-300 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                }`}
+                disabled={busy}
+                onClick={() => setFraming(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-neutral-500">
+            {framings.find((option) => option.value === framing)?.hint}
+          </p>
         </div>
 
         <div className="mt-4">
@@ -109,7 +141,7 @@ export default function RecipeGenerateDialog({
           </button>
           <button
             className="rounded bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-500 disabled:opacity-50"
-            onClick={() => onGenerate(audioMode, volume)}
+            onClick={() => onGenerate(audioMode, volume, framing)}
             disabled={busy}
           >
             {busy ? t(lang, "recipe_generating") : t(lang, "recipe_generate")}

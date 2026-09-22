@@ -22,7 +22,7 @@ from app.jobs.manager import job_manager
 from app.jobs.models import Job, JobType
 from app.jobs.runners import run_recipe_analyze_job, run_recipe_generate_job
 from app.pipeline.recipe import recipe_analyzer, store
-from app.pipeline.recipe.models import AudioMode, RecipeScene, TargetDuration
+from app.pipeline.recipe.models import AudioMode, FramingMode, RecipeScene, TargetDuration
 
 router = APIRouter(prefix="/recipe", tags=["recipe"], dependencies=[Depends(require_local_token)])
 
@@ -49,6 +49,9 @@ class RecipeGenerateRequest(BaseModel):
     audio_mode: AudioMode = AudioMode.KEEP
     volume_percent: int = 20
     output_folder: str | None = None
+    # Like the audio mode, this is decided at render time -- changing it
+    # re-renders the scenes but never re-runs the analysis.
+    framing: FramingMode = FramingMode.CROP
 
 
 class RecipeResponse(BaseModel):
@@ -64,6 +67,7 @@ class RecipeResponse(BaseModel):
     target_duration: TargetDuration = TargetDuration.AUTO
     faceless: bool = True
     visual_analysis: str = "ok"
+    overlays: list[dict] = []
     warnings: list[str] = []
     vo_script: str = ""
     text_guide: str = ""
@@ -122,6 +126,7 @@ def get_recipe(project_id: str) -> RecipeResponse:
         response.target_duration = analysis.target_duration
         response.faceless = analysis.faceless
         response.visual_analysis = analysis.visual_analysis
+        response.overlays = analysis.overlays
         response.warnings = analysis.warnings
         response.vo_script = recipe_analyzer.build_full_vo_script(analysis, enabled)
         response.text_guide = recipe_analyzer.build_text_guide(analysis, enabled)
@@ -151,7 +156,14 @@ def generate_recipe_video(project_id: str, payload: RecipeGenerateRequest) -> Jo
     job = job_manager.create(JobType.GENERATE_RECIPE_VIDEO, project_id=project_id)
     thread = threading.Thread(
         target=run_recipe_generate_job,
-        args=(job.id, clip_id, payload.audio_mode.value, payload.volume_percent, payload.output_folder),
+        args=(
+            job.id,
+            clip_id,
+            payload.audio_mode.value,
+            payload.volume_percent,
+            payload.output_folder,
+            payload.framing.value,
+        ),
         daemon=True,
     )
     thread.start()

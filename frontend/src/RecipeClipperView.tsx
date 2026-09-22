@@ -18,6 +18,7 @@ import {
   type Project,
   type Recipe,
   type RecipeAudioMode,
+  type RecipeFramingMode,
   type RecipeScene,
   type RecipeTargetDuration,
 } from "./api";
@@ -29,6 +30,9 @@ import type { AppSettings } from "./settings";
 interface Props {
   settings: AppSettings;
   openProject: Project | null;
+  /** Clears this view back to an empty sheet, so a finished project is not a
+   *  dead end that only closing the app escapes. */
+  onStartOver: () => void;
   /** The AI provider is configured once, in Settings -- this step only needs
    *  a way to send the user there when it has not been. */
   onOpenSettings: () => void;
@@ -76,7 +80,7 @@ function StepBar({ current, language }: { current: number; language: Language })
   );
 }
 
-export default function RecipeClipperView({ settings, openProject, onOpenSettings }: Props) {
+export default function RecipeClipperView({ settings, openProject, onOpenSettings, onStartOver }: Props) {
   const lang = settings.language;
   const [step, setStep] = useState(1);
   const [name, setName] = useState("Resep Baru");
@@ -221,7 +225,7 @@ export default function RecipeClipperView({ settings, openProject, onOpenSetting
     }
   }
 
-  async function handleGenerate(audioMode: RecipeAudioMode, volumePercent: number) {
+  async function handleGenerate(audioMode: RecipeAudioMode, volumePercent: number, framing: RecipeFramingMode) {
     if (!project) return;
     setGenerating(true);
     setError(null);
@@ -231,6 +235,7 @@ export default function RecipeClipperView({ settings, openProject, onOpenSetting
         project.id,
         audioMode,
         volumePercent,
+        framing,
         settings.outputFolder || undefined,
       );
       setGenerateJob(job);
@@ -446,12 +451,19 @@ export default function RecipeClipperView({ settings, openProject, onOpenSetting
 
       {step === 3 && (
         <div className="max-w-3xl space-y-4">
-          <div className="flex justify-start">
+          <div className="flex justify-between">
             <button
               className="rounded border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
               onClick={() => setStep(2)}
             >
               {t(lang, "back")}
+            </button>
+            <button
+              className="rounded border border-purple-300 px-4 py-2 text-sm text-purple-600 hover:bg-purple-50 disabled:opacity-40 dark:border-purple-800 dark:text-purple-400 dark:hover:bg-purple-950"
+              disabled={analyzing || generating || saving}
+              onClick={onStartOver}
+            >
+              {t(lang, "start_new_project")}
             </button>
           </div>
 

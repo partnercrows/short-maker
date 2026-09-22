@@ -307,3 +307,74 @@ def test_a_model_substitution_is_reported_not_hidden():
 
     assert len(notes) == 1
     assert "gemini-flash-latest" in notes[0] and "gemini-3.5-flash" in notes[0]
+
+
+# --- framing modes (the "sudut jadi sempit" complaint) -----------------------
+
+
+def _frame(width=1920, height=1080):
+    import numpy as np
+
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    frame[:, : width // 2] = 60  # left half darker, so the crop position shows
+    return frame
+
+
+def _window(x=656, width=608, height=1080):
+    return CropWindow(time=0.0, x=x, y=0, width=width, height=height)
+
+
+def test_every_framing_mode_produces_the_same_output_size():
+    from app.pipeline.recipe.models import FramingMode
+    from app.pipeline.recipe.scene_render import compose_frame
+
+    for mode in (FramingMode.CROP, FramingMode.BALANCED, FramingMode.FIT):
+        composed = compose_frame(_frame(), _window(), 720, 1280, mode, [])
+        assert composed.shape == (1280, 720, 3), f"{mode} produced {composed.shape}"
+
+
+def test_fit_shows_more_of_the_frame_than_crop():
+    """The whole point: a 9:16 crop of 16:9 keeps a third of the width."""
+    import numpy as np
+
+    from app.pipeline.recipe.models import FramingMode
+    from app.pipeline.recipe.scene_render import compose_frame
+
+    frame = _frame()
+    frame[:, 0:40] = 255  # a marker at the very left edge of the source
+
+    cropped = compose_frame(frame, _window(), 720, 1280, FramingMode.CROP, [])
+    fitted = compose_frame(frame, _window(), 720, 1280, FramingMode.FIT, [])
+
+    assert not (cropped == 255).any(), "the crop should have cut the left edge away"
+    assert (fitted == 255).any(), "fit should still show it"
+
+
+def test_balanced_widens_the_view_but_stops_short_of_a_watermark():
+    from app.pipeline.recipe.models import FramingMode
+    from app.pipeline.recipe.overlay_detect import OverlayBox, overlap_fraction
+    from app.pipeline.recipe.scene_render import _widen
+
+    window = _window(x=1000)
+    logo = OverlayBox(x=1710, y=48, width=138, height=127)
+
+    widened_clean = _widen(window, 1920, 1080, [])
+    widened_guarded = _widen(window, 1920, 1080, [logo])
+
+    assert widened_clean.width > window.width, "balanced should show more"
+    assert overlap_fraction([logo], window.x, 0, window.width, 1080) == 0.0  # was clean
+    assert overlap_fraction([logo], widened_guarded.x, 0, widened_guarded.width, 1080) <= 0.01
+
+
+def test_changing_framing_re_renders_but_changing_audio_still_does_not(tmp_path):
+    from app.pipeline.recipe.models import FramingMode
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"0" * 1024)
+
+    crop = assemble.scene_fingerprint(str(source), 1.0, 5.0, _plan(), framing=FramingMode.CROP)
+    fit = assemble.scene_fingerprint(str(source), 1.0, 5.0, _plan(), framing=FramingMode.FIT)
+    crop_again = assemble.scene_fingerprint(str(source), 1.0, 5.0, _plan(), framing=FramingMode.CROP)
+
+    assert crop != fit  # framing changes pixels
+    assert crop == crop_again  # and nothing else did

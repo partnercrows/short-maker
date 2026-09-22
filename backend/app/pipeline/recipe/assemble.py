@@ -16,7 +16,8 @@ import os
 from pathlib import Path
 
 from app.core.ffmpeg_utils import concat_videos
-from app.pipeline.recipe.models import AudioMode
+from app.pipeline.recipe.models import AudioMode, FramingMode
+from app.pipeline.recipe.overlay_detect import OverlayBox
 from app.pipeline.recipe.scene_render import SCENE_FPS, SCENE_HEIGHT, SCENE_NAME, SCENE_WIDTH, audio_filter_for, render_scene
 from app.pipeline.reframe.models import ReframePlan
 
@@ -34,6 +35,7 @@ def scene_fingerprint(
     target_width: int = SCENE_WIDTH,
     target_height: int = SCENE_HEIGHT,
     fps: int = SCENE_FPS,
+    framing: FramingMode = FramingMode.CROP,
 ) -> str:
     try:
         stat = os.stat(source_video)
@@ -47,6 +49,9 @@ def scene_fingerprint(
         "end": round(end, 3),
         "plan": json.loads(plan.model_dump_json()),
         "target": [target_width, target_height, fps],
+        # Framing changes the pixels, so it belongs here -- unlike the audio
+        # mode and the running order, which deliberately do not.
+        "framing": framing.value,
         "renderer": RENDERER_VERSION,
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8"))
@@ -63,11 +68,13 @@ def ensure_scene_rendered(
     target_width: int = SCENE_WIDTH,
     target_height: int = SCENE_HEIGHT,
     fps: int = SCENE_FPS,
+    framing: FramingMode = FramingMode.CROP,
+    overlays: list[OverlayBox] | None = None,
 ) -> tuple[Path, bool]:
     """Returns (scene file, rendered_now). A cache hit costs a file read."""
     scene_dir.mkdir(parents=True, exist_ok=True)
     scene_path = scene_dir / SCENE_NAME
-    fingerprint = scene_fingerprint(source_video, start, end, plan, target_width, target_height, fps)
+    fingerprint = scene_fingerprint(source_video, start, end, plan, target_width, target_height, fps, framing)
     marker = scene_dir / FINGERPRINT_NAME
 
     if scene_path.is_file() and marker.is_file():
@@ -86,6 +93,8 @@ def ensure_scene_rendered(
         target_width=target_width,
         target_height=target_height,
         fps=fps,
+        framing=framing,
+        overlays=overlays,
     )
     marker.write_text(fingerprint, encoding="utf-8")
     return scene_path, True

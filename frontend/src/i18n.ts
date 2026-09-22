@@ -169,6 +169,23 @@ const dict = {
     id: "AI boleh sedikit melewati target bila ada langkah penting yang akan hilang.",
     en: "The AI may run slightly over target if a step would otherwise be lost.",
   },
+  start_new_project: { id: "Proyek Baru", en: "New Project" },
+  recipe_framing: { id: "Framing", en: "Framing" },
+  recipe_framing_crop: { id: "Isi Penuh", en: "Fill" },
+  recipe_framing_crop_hint: {
+    id: "Memenuhi layar, tapi sisi kiri-kanan video asli terpotong -- sudutnya paling sempit.",
+    en: "Fills the screen, but cuts away the sides of the original -- the tightest view.",
+  },
+  recipe_framing_balanced: { id: "Seimbang", en: "Balanced" },
+  recipe_framing_balanced_hint: {
+    id: "Menampilkan area lebih lebar dengan latar blur di atas-bawah, tetap menghindari watermark.",
+    en: "Shows a wider area with a blurred band above and below, still avoiding any watermark.",
+  },
+  recipe_framing_fit: { id: "Muat Semua", en: "Fit All" },
+  recipe_framing_fit_hint: {
+    id: "Seluruh frame asli terlihat, dengan latar blur di atas-bawah.",
+    en: "The whole original frame is visible, with a blurred band above and below.",
+  },
   recipe_provider_missing: {
     id: "Provider AI belum diatur. Atur sekali di Pengaturan, lalu kembali ke sini.",
     en: "No AI provider is set up yet. Set it once in Settings, then come back here.",

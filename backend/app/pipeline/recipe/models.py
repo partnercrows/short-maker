@@ -103,6 +103,20 @@ class TargetDuration(StrEnum):
         return None
 
 
+class FramingMode(StrEnum):
+    """How the 16:9 source is fitted into a 9:16 frame.
+
+    A 9:16 crop of a 16:9 source keeps only about a third of the width, which
+    is immersive for a close-up and far too tight for a wide worktop shot --
+    "sudut jadi sempit". The other two modes trade some of the screen for the
+    rest of the composition.
+    """
+
+    CROP = "crop"  # fills the screen, narrowest view
+    BALANCED = "balanced"  # a wider slice, padded above and below
+    FIT = "fit"  # the whole frame, padded
+
+
 class AudioMode(StrEnum):
     KEEP = "keep"
     LOWER = "lower"
@@ -207,6 +221,9 @@ class RecipeAnalysis(BaseModel):
     target_duration: TargetDuration = TargetDuration.AUTO
     faceless: bool = True
     visual_analysis: str = "ok"  # ok | unavailable
+    # Burned-in graphics found in the source, in source pixels. Kept so the
+    # renderer can also avoid them when it widens the frame.
+    overlays: list[dict] = []
     warnings: list[str] = []
 
     @property

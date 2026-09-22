@@ -355,6 +355,9 @@ export function regenerateSocialKit(clipId: string, platform: string, provider: 
 
 export type RecipeTargetDuration = "1min" | "2min" | "auto";
 export type RecipeAudioMode = "keep" | "lower" | "mute";
+// How the 16:9 source is fitted into the 9:16 frame: fill the screen, a
+// wider slice with padding, or the whole frame with padding.
+export type RecipeFramingMode = "crop" | "balanced" | "fit";
 
 export interface RecipeSceneFaceCheck {
   status: "clean" | "reframed" | "warning";
@@ -443,11 +446,17 @@ export function generateRecipeVideo(
   projectId: string,
   audioMode: RecipeAudioMode,
   volumePercent: number,
+  framing: RecipeFramingMode,
   outputFolder?: string,
 ): Promise<Job> {
   return request(`/recipe/${projectId}/generate`, {
     method: "POST",
-    body: JSON.stringify({ audio_mode: audioMode, volume_percent: volumePercent, output_folder: outputFolder }),
+    body: JSON.stringify({
+      audio_mode: audioMode,
+      volume_percent: volumePercent,
+      framing,
+      output_folder: outputFolder,
+    }),
   });
 }
 

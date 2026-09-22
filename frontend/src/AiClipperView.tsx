@@ -88,9 +88,12 @@ interface Props {
   settings: AppSettings;
   onSettingsChange: (next: AppSettings) => void;
   openProject: Project | null;
+  /** Clears this view back to an empty sheet: a finished project used to be a
+   *  dead end that only restarting the app escaped. */
+  onStartOver: () => void;
 }
 
-export default function AiClipperView({ settings, onSettingsChange, openProject }: Props) {
+export default function AiClipperView({ settings, onSettingsChange, openProject, onStartOver }: Props) {
   const lang = settings.language;
   const [step, setStep] = useState(1);
 
@@ -425,12 +428,19 @@ export default function AiClipperView({ settings, onSettingsChange, openProject 
 
       {step === 3 && (
         <div className="space-y-4">
-          <div className="flex justify-start">
+          <div className="flex justify-between">
             <button
               className="rounded border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
               onClick={() => setStep(2)}
             >
               {t(lang, "back")}
+            </button>
+            <button
+              className="rounded border border-purple-300 px-4 py-2 text-sm text-purple-600 hover:bg-purple-50 disabled:opacity-40 dark:border-purple-800 dark:text-purple-400 dark:hover:bg-purple-950"
+              disabled={analyzing}
+              onClick={onStartOver}
+            >
+              {t(lang, "start_new_project")}
             </button>
           </div>
 
