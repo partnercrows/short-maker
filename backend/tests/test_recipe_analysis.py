@@ -287,3 +287,67 @@ def test_auto_target_follows_the_length_of_the_source():
     assert recipe_analyzer.auto_target_seconds(258.0) == pytest.approx(77.4)
     assert recipe_analyzer.auto_target_seconds(60.0) == pytest.approx(45.0)  # floor
     assert recipe_analyzer.auto_target_seconds(7200.0) == pytest.approx(120.0)  # ceiling
+
+
+# --- short-form sources open on the dish -------------------------------------
+
+
+def test_a_video_that_opens_on_the_finished_dish_treats_it_as_the_hook(monkeypatch):
+    """Short-form cooking videos are cut the other way round from the PRD's
+    assumption: the hero shot is at the *start*. Read as step one, it put
+    'dust with cocoa' at the front of the cooking story."""
+    raw = _response(
+        [
+            _scene("FINAL_DISH", 29, 32),
+            _scene("ADDING_MAIN_INGREDIENT", 122, 127),
+            _scene("STIRRING", 243, 248),
+            _scene("FINAL_DISH", 254, 258),
+        ]
+    )
+
+    analysis = _analyze(monkeypatch, raw, video_duration=258.0, labels=[])
+
+    assert analysis.scenes[0].is_hook, "the opening dish shot should be the hook"
+    assert 2.0 <= analysis.scenes[0].duration <= 4.0
+    body = [scene.label for scene in analysis.scenes[1:]]
+    assert body == ["ADDING_MAIN_INGREDIENT", "STIRRING", "FINAL_DISH"]
+
+
+def test_an_intro_montage_is_not_mistaken_for_the_first_cooking_steps(monkeypatch):
+    raw = _response(
+        [
+            _scene("FINISHING", 15, 19),  # admiring the finished truffles
+            _scene("FINAL_DISH", 29, 32),
+            _scene("MIXING", 146, 150),
+            _scene("FINAL_DISH", 254, 258),
+        ]
+    )
+
+    analysis = _analyze(monkeypatch, raw, video_duration=258.0, labels=[])
+
+    assert analysis.scenes[0].is_hook
+    assert "FINISHING" not in [scene.label for scene in analysis.scenes[1:]], "intro shot still in the body"
+    assert analysis.scenes[-1].label == "FINAL_DISH", "the story should still end on the dish"
+
+
+def test_a_dish_shot_with_no_later_equivalent_is_kept(monkeypatch):
+    """Dropping it would lose the only view of the finished dish."""
+    raw = _response([_scene("FINAL_DISH", 10, 14), _scene("MIXING", 146, 150)])
+
+    analysis = _analyze(monkeypatch, raw, video_duration=258.0, labels=[])
+
+    assert any(scene.label == "FINAL_DISH" for scene in analysis.scenes)
+
+
+def test_gap_filling_prefers_a_step_the_timeline_does_not_have_yet(monkeypatch):
+    """Four more shots of the same pouring action tell the viewer nothing."""
+    raw = _response([_scene("ADDING_MAIN_INGREDIENT", 120, 127)])
+    labels = [
+        FrameLabel(index=1, time=60.0, label="ADDING_MAIN_INGREDIENT", confidence=95, action_strength=95),
+        FrameLabel(index=2, time=200.0, label="STIRRING", confidence=70, action_strength=60),
+    ]
+
+    analysis = _analyze(monkeypatch, raw, video_duration=258.0, labels=labels)
+
+    labels_used = [scene.label for scene in analysis.scenes]
+    assert "STIRRING" in labels_used, f"a new step should win over a stronger repeat: {labels_used}"

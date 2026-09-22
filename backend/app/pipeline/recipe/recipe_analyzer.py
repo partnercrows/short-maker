@@ -34,9 +34,19 @@ MAX_SCENES = 24
 # Below this the model is guessing rather than reporting, so the ingredient is
 # demoted to "possible" and scrubbed out of the spoken guide (PRD S8).
 INGREDIENT_CONFIDENCE_FLOOR = 60
-# A hook may only be lifted from the end of the video -- that is the finished
-# dish. Anything earlier is just a scene out of order (PRD S11).
+# Where a finished-dish hook may be lifted from. In a long-form video the
+# dish appears at the end, which is what the PRD assumes (S11). Short-form
+# cooking videos are cut the other way round: they *open* on the hero shot and
+# then go back to the start of the cook. Reading that opening as step one is
+# what put "dust with cocoa" and the finished dish at the front of the story
+# instead of at its ends.
 HOOK_MIN_POSITION = 0.7
+HOOK_MAX_OPENING_POSITION = 0.15
+# An intro montage of the finished dish is not a cooking step. Dropped from the
+# body only when the same label appears later too, so the story still ends on
+# the dish.
+INTRO_SHOT_POSITION = 0.12
+_DISH_LABELS = {"FINAL_DISH", "FINISHING", "SERVING", "PLATING"}
 _TRANSCRIPT_CHAR_BUDGET = 30000
 # Two scenes covering the same seconds are the same footage twice. Beyond this
 # much shared time the later one is a duplicate, not a second look.
@@ -266,23 +276,80 @@ def _enforce_chronology(scenes: list[RecipeScene], video_duration: float) -> lis
     """
     if not scenes:
         return []
-    hook: RecipeScene | None = None
+
     rest = list(scenes)
-    first = rest[0]
-    if first.is_hook and video_duration > 0 and first.source_start >= video_duration * HOOK_MIN_POSITION:
-        hook = first
-        rest = rest[1:]
+    hook = _pick_hook(rest, video_duration)
+    if hook is not None:
+        rest = [scene for scene in rest if scene is not hook]
 
     # Any other scene claiming to be a hook is just a scene.
     for scene in rest:
         scene.is_hook = False
 
+    rest = _drop_intro_shots(rest, video_duration)
     ordered = sorted(rest, key=lambda scene: scene.source_start)
     if hook is not None:
         ordered.insert(0, hook)
     for position, scene in enumerate(ordered):
         scene.order = position
     return ordered
+
+
+def _pick_hook(scenes: list[RecipeScene], video_duration: float) -> RecipeScene | None:
+    """The opening glance at the finished dish, wherever the editor put it.
+
+    Long-form videos end on the dish; short-form ones open on it. Both are the
+    hook, and neither belongs in the middle of the cooking story.
+    """
+    if video_duration <= 0:
+        return None
+    late = video_duration * HOOK_MIN_POSITION
+    early = video_duration * HOOK_MAX_OPENING_POSITION
+
+    claimed = next((scene for scene in scenes if scene.is_hook), None)
+    if claimed is not None and (claimed.source_start >= late or _is_dish_shot(claimed, early)):
+        return claimed
+
+    # The model did not mark one, but a source that opens on the finished dish
+    # has still handed us a hook. Look for the dish specifically rather than
+    # whatever happens to come first: these openings often admire the result
+    # for a few shots before the cooking starts.
+    openers = [scene for scene in scenes if _is_dish_shot(scene, early)]
+    if openers and len(scenes) > 1:
+        opening = min(openers, key=lambda scene: scene.source_start)
+        opening.is_hook = True
+        low, high = duration_range_for(opening.label, is_hook=True)
+        opening.source_end = round(opening.source_start + min(max(opening.duration, low), high), 2)
+        return opening
+    return None
+
+
+def _is_dish_shot(scene: RecipeScene, before: float) -> bool:
+    return scene.label == "FINAL_DISH" and scene.source_start <= before
+
+
+def _drop_intro_shots(scenes: list[RecipeScene], video_duration: float) -> list[RecipeScene]:
+    """Removes the opening hero montage from the body of the story.
+
+    A short-form cook often opens with several seconds of the finished dish
+    being admired. Left in, those become the first "steps", which is why one
+    timeline began with dusting cocoa over finished truffles. They are only
+    dropped when the same kind of shot appears later, so the video still ends
+    where it should.
+    """
+    if video_duration <= 0:
+        return scenes
+    cutoff = video_duration * INTRO_SHOT_POSITION
+    kept = []
+    for scene in scenes:
+        intro = scene.label in _DISH_LABELS and scene.source_start <= cutoff
+        later_equivalent = any(
+            other is not scene and other.label in _DISH_LABELS and other.source_start > cutoff for other in scenes
+        )
+        if intro and later_equivalent:
+            continue
+        kept.append(scene)
+    return kept or scenes
 
 
 def _apply_ingredient_gate(analysis: RecipeAnalysis, rows: list, labels: list[FrameLabel]) -> None:
@@ -417,7 +484,7 @@ def _fill_coverage_gaps(
         if not gaps:
             break
 
-        candidate = _best_label_in_gaps(labels, gaps)
+        candidate = _best_label_in_gaps(labels, gaps, {scene.label for scene in analysis.scenes})
         if candidate is None:
             break
         if analysis.estimated_duration >= target_seconds:
@@ -464,8 +531,16 @@ def _uncovered_ranges(
     return gaps
 
 
-def _best_label_in_gaps(labels: list[FrameLabel], gaps: list[tuple[float, float]]) -> FrameLabel | None:
-    """The most convincing cooking moment inside any uncovered stretch."""
+def _best_label_in_gaps(
+    labels: list[FrameLabel], gaps: list[tuple[float, float]], already_covered: set[str] | None = None
+) -> FrameLabel | None:
+    """The most convincing cooking moment inside any uncovered stretch.
+
+    A step the timeline does not show yet wins over a stronger repeat of one
+    it already has: filling four gaps with four more shots of the same pouring
+    action tells the viewer nothing new.
+    """
+    covered = already_covered or set()
     inside = [
         label
         for label in labels
@@ -475,7 +550,7 @@ def _best_label_in_gaps(labels: list[FrameLabel], gaps: list[tuple[float, float]
     ]
     if not inside:
         return None
-    return max(inside, key=lambda label: (label.action_strength, label.confidence))
+    return max(inside, key=lambda label: (label.label not in covered, label.action_strength, label.confidence))
 
 
 def check_duration_fit(analysis: RecipeAnalysis, target: TargetDuration, video_duration: float = 0.0) -> list[str]:
