@@ -351,3 +351,23 @@ def test_gap_filling_prefers_a_step_the_timeline_does_not_have_yet(monkeypatch):
 
     labels_used = [scene.label for scene in analysis.scenes]
     assert "STIRRING" in labels_used, f"a new step should win over a stronger repeat: {labels_used}"
+
+
+def test_a_cut_is_never_snapped_past_the_end_of_the_video(monkeypatch):
+    """A real failure: the last shot's boundary is the end of the video, so a
+    final-dish hook was snapped to start at 1877.94s of a 1877.94s source --
+    nothing left to cut, and the render died on an empty segment."""
+    segments = [
+        VisualSegment(index=0, start=0.0, end=1870.0, peak_time=900.0, motion=1.0),
+        VisualSegment(index=1, start=1870.0, end=1877.94, peak_time=1875.0, motion=4.0),
+    ]
+    raw = _response([_scene("FINAL_DISH", 1876, 1879, is_hook=True), _scene("CUTTING", 200, 206)])
+    monkeypatch.setattr(recipe_analyzer, "complete_chat", lambda *a, **k: raw)
+
+    analysis = recipe_analyzer.analyze_recipe(
+        _PROVIDER, [], _transcript(), TargetDuration.AUTO, segments, video_duration=1877.94
+    )
+
+    for scene in analysis.scenes:
+        assert scene.source_end <= 1877.94 + 0.01, f"{scene.label} runs past the end: {scene.source_end}"
+        assert scene.duration >= 1.0, f"{scene.label} has nothing to show: {scene.duration}"

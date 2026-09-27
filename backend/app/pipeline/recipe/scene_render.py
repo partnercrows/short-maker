@@ -20,7 +20,7 @@ from pathlib import Path
 
 import cv2
 
-from app.core.ffmpeg_utils import cut_subclip, ffmpeg_path, has_audio_stream, run_with_frame_pipe
+from app.core.ffmpeg_utils import cut_subclip, ffmpeg_path, has_audio_stream, probe_metadata, run_with_frame_pipe
 from app.pipeline.recipe.models import AudioMode, FramingMode
 from app.pipeline.recipe.overlay_detect import OverlayBox, overlap_fraction
 from app.pipeline.reframe.models import ReframePlan
@@ -52,6 +52,8 @@ def render_scene(
     scene_dir.mkdir(parents=True, exist_ok=True)
     segment_path = scene_dir / SEGMENT_NAME
     scene_path = scene_dir / SCENE_NAME
+
+    start, duration = _fit_inside_source(source_video, start, duration)
 
     # Cut first: the crop plan's timestamps are relative to the scene, and
     # seeking a two-hour container with OpenCV is not dependable.
@@ -155,7 +157,10 @@ def _cropped_frames(
     frame rate so the pipe and the container agree on timing."""
     capture = cv2.VideoCapture(str(segment_path))
     if not capture.isOpened():
-        raise RuntimeError(f"Could not open segment: {segment_path}")
+        raise RuntimeError(
+            "The cut for this scene came out empty, so there was nothing to render. This usually means the "
+            f"scene sits at or past the end of the source video. Trim or remove it in the timeline. ({segment_path})"
+        )
 
     source_fps = capture.get(cv2.CAP_PROP_FPS) or float(fps)
     windows = plan.windows
@@ -264,3 +269,26 @@ def _blurred_backdrop(region, target_width: int, target_height: int):
     left = max(0, (cover.shape[1] - target_width) // 2)
     cover = cover[top : top + target_height, left : left + target_width]
     return cv2.GaussianBlur(cover, (0, 0), PAD_BLUR_SIGMA)
+
+
+MIN_SCENE_SECONDS = 0.5
+
+
+def _fit_inside_source(source_video: str, start: float, duration: float) -> tuple[float, float]:
+    """Pulls a scene back inside the video before cutting it.
+
+    A scene that begins on the last frame produces a segment file with no
+    frames, and the failure then surfaced as an unexplained "could not open
+    segment" several steps later. Timelines built before this was fixed still
+    contain such scenes, so the renderer repairs them rather than refusing.
+    """
+    try:
+        usable = probe_metadata(source_video).video_duration
+    except Exception:  # noqa: BLE001 -- an unprobeable source is the cut's problem to report
+        return start, duration
+
+    if usable <= 0:
+        return start, duration
+    duration = max(MIN_SCENE_SECONDS, min(duration, usable))
+    start = max(0.0, min(start, usable - duration))
+    return start, duration

@@ -223,7 +223,7 @@ def _build_scenes(rows: list, video_duration: float, segments: list[VisualSegmen
         label = str(row.get("label", "OTHER")).strip().upper()
         is_hook = bool(row.get("is_hook", False))
         start, end = _clamp_duration(start, end, label, is_hook=is_hook, video_duration=video_duration)
-        start, end = _snap_to_quiet_moment(start, end, segments)
+        start, end = _snap_to_quiet_moment(start, end, segments, video_duration)
         scenes.append(
             RecipeScene(
                 scene_id=str(uuid.uuid4()),
@@ -254,9 +254,17 @@ def _clamp_duration(
     return start, end
 
 
-def _snap_to_quiet_moment(start: float, end: float, segments: list[VisualSegment], window: float = 2.0) -> tuple[float, float]:
+def _snap_to_quiet_moment(
+    start: float, end: float, segments: list[VisualSegment], video_duration: float = 0.0, window: float = 2.0
+) -> tuple[float, float]:
     """Nudge a cut towards a shot boundary within a couple of seconds, so it
-    lands between actions instead of halfway through a knife stroke."""
+    lands between actions instead of halfway through a knife stroke.
+
+    The last shot's boundary is the end of the video itself, so without the
+    duration here this happily snapped a final-dish hook to start at 1877.94s
+    of a 1877.94s video -- nothing left to cut, and the render failed on a
+    segment file with no frames in it.
+    """
     if not segments:
         return start, end
     boundaries = sorted({segment.start for segment in segments} | {segment.end for segment in segments})
@@ -264,6 +272,8 @@ def _snap_to_quiet_moment(start: float, end: float, segments: list[VisualSegment
     nearest = min(boundaries, key=lambda boundary: abs(boundary - start))
     if abs(nearest - start) <= window:
         start = max(0.0, nearest)
+    if video_duration > 0:
+        start = max(0.0, min(start, video_duration - duration))
     return start, start + duration
 
 
@@ -319,7 +329,9 @@ def _pick_hook(scenes: list[RecipeScene], video_duration: float) -> RecipeScene 
         opening = min(openers, key=lambda scene: scene.source_start)
         opening.is_hook = True
         low, high = duration_range_for(opening.label, is_hook=True)
-        opening.source_end = round(opening.source_start + min(max(opening.duration, low), high), 2)
+        length = min(max(opening.duration, low), high)
+        opening.source_start = round(max(0.0, min(opening.source_start, video_duration - length)), 2)
+        opening.source_end = round(opening.source_start + length, 2)
         return opening
     return None
 

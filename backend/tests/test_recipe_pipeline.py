@@ -378,3 +378,34 @@ def test_changing_framing_re_renders_but_changing_audio_still_does_not(tmp_path)
 
     assert crop != fit  # framing changes pixels
     assert crop == crop_again  # and nothing else did
+
+
+def test_a_scene_at_the_very_end_is_pulled_back_inside_the_video(monkeypatch):
+    """Timelines built before the snapping fix still hold such scenes, so the
+    renderer repairs them instead of failing on an empty cut."""
+    from app.core.ffmpeg_utils import VideoMetadata
+    from app.pipeline.recipe import scene_render
+
+    monkeypatch.setattr(
+        scene_render,
+        "probe_metadata",
+        lambda path: VideoMetadata(duration=1877.94, width=1920, height=1080, fps=30.0, video_duration=1877.94),
+    )
+
+    start, duration = scene_render._fit_inside_source("source.mp4", 1877.94, 2.0)
+
+    assert start + duration <= 1877.94
+    assert duration >= 2.0 - 0.01
+
+
+def test_fitting_leaves_a_normal_scene_untouched(monkeypatch):
+    from app.core.ffmpeg_utils import VideoMetadata
+    from app.pipeline.recipe import scene_render
+
+    monkeypatch.setattr(
+        scene_render,
+        "probe_metadata",
+        lambda path: VideoMetadata(duration=600.0, width=1920, height=1080, fps=30.0, video_duration=600.0),
+    )
+
+    assert scene_render._fit_inside_source("source.mp4", 120.0, 6.0) == (120.0, 6.0)
