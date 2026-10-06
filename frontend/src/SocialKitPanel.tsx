@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { generateSocialKit, getSocialKits, regenerateSocialKit, type SocialKit, type TitleOption } from "./api";
+import { generateSocialKit, getSocialKitPrompt, getSocialKits, regenerateSocialKit, type SocialKit, type TitleOption } from "./api";
 import { t, type Language } from "./i18n";
 import type { AppSettings } from "./settings";
 
@@ -21,12 +21,20 @@ function parseTitles(titlesJson: string | null): TitleOption[] {
   }
 }
 
-function CopyButton({ text, lang }: { text: string; lang: Language }) {
+function CopyButton({
+  text,
+  lang,
+  label,
+}: {
+  text: string | (() => Promise<string>);
+  lang: Language;
+  label?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(typeof text === "string" ? text : await text());
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -41,7 +49,7 @@ function CopyButton({ text, lang }: { text: string; lang: Language }) {
       className="shrink-0 rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
       onClick={handleCopy}
     >
-      {copied ? t(lang, "copied") : t(lang, "copy")}
+      {copied ? t(lang, "copied") : (label ?? t(lang, "copy"))}
     </button>
   );
 }
@@ -187,6 +195,7 @@ export default function SocialKitPanel({ lang, clipId, provider, onClose }: Prop
             </div>
           )}
 
+          <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             className="rounded bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
@@ -195,6 +204,31 @@ export default function SocialKitPanel({ lang, clipId, provider, onClose }: Prop
           >
             {generating ? t(lang, "generating_social_kit") : kit ? t(lang, "regenerate") : t(lang, "generate_social_kit")}
           </button>
+          <CopyButton
+            lang={lang}
+            label={t(lang, "copy_social_kit_prompt")}
+            text={() => getSocialKitPrompt(clipId, platform)}
+          />
+          {kit && (
+            <CopyButton
+              lang={lang}
+              label={t(lang, "copy_social_kit_json")}
+              text={JSON.stringify(
+                {
+                  platform: kit.platform,
+                  titles: titles,
+                  description: kit.description,
+                  hashtags: hashtagList,
+                  thumbnail_idea: kit.thumbnail_idea,
+                  thumbnail_prompt: kit.thumbnail_prompt,
+                  ...(kit.extra_json ? JSON.parse(kit.extra_json) : {}),
+                },
+                null,
+                2,
+              )}
+            />
+          )}
+          </div>
         </>
       )}
     </div>

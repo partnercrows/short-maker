@@ -145,6 +145,8 @@ const dict = {
   downloading: { id: "Menyimpan...", en: "Saving..." },
   download_done: { id: "Tersimpan!", en: "Saved!" },
   social_kit: { id: "Social Kit", en: "Social Kit" },
+  copy_social_kit_prompt: { id: "Salin prompt (untuk ChatGPT/Gemini)", en: "Copy prompt (for ChatGPT/Gemini)" },
+  copy_social_kit_json: { id: "Salin JSON", en: "Copy JSON" },
   generate_social_kit: { id: "Buat Social Kit", en: "Generate Social Kit" },
   generating_social_kit: { id: "Membuat Social Kit...", en: "Generating Social Kit..." },
   regenerate: { id: "Buat Ulang", en: "Regenerate" },

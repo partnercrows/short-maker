@@ -51,7 +51,7 @@ def build_prompt(clip_summary: str, platform: str) -> tuple[str, str]:
 
 def generate_social_kit(config: ProviderConfig, clip_summary: str, platform: str) -> SocialKitContent:
     system_prompt, user_prompt = build_prompt(clip_summary, platform)
-    raw_response = complete_chat(config, system_prompt, user_prompt)
+    raw_response = complete_chat(config, system_prompt, user_prompt, quick=True)
     parsed = extract_json(raw_response)
     return SocialKitContent(**parsed)
 
@@ -104,7 +104,7 @@ def generate_recipe_social_kit(
     config: ProviderConfig, recipe_summary: str, platform: str, language: str = "id"
 ) -> tuple[SocialKitContent, RecipeSocialKitExtras]:
     system_prompt, user_prompt = build_recipe_prompt(recipe_summary, platform, language)
-    parsed = extract_json(complete_chat(config, system_prompt, user_prompt))
+    parsed = extract_json(complete_chat(config, system_prompt, user_prompt, quick=True))
     content = SocialKitContent(
         titles=[TitleOption(**title) for title in parsed.get("titles", [])],
         description=str(parsed.get("description", "")),

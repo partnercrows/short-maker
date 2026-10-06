@@ -16,6 +16,8 @@ from app.core.config import get_settings
 from app.pipeline.social_kit import (
     RecipeSocialKitExtras,
     SocialKitContent,
+    build_prompt,
+    build_recipe_prompt,
     generate_recipe_social_kit,
     generate_social_kit,
 )
@@ -37,6 +39,24 @@ def get_social_kits(clip_id: str) -> list[SocialKit]:
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM social_kits WHERE clip_id = ? ORDER BY created_at DESC", (clip_id,)).fetchall()
     return [SocialKit(**dict(row)) for row in rows]
+
+
+class SocialKitPrompt(BaseModel):
+    prompt: str
+
+
+@router.get("/{clip_id}/prompt", response_model=SocialKitPrompt)
+def get_social_kit_prompt(clip_id: str, platform: str) -> SocialKitPrompt:
+    """The exact prompt Social Kit would send, as one block of text to paste
+    into ChatGPT or Gemini's own chat -- no API key, no waiting on our request."""
+    clip = _get_clip_or_404(clip_id)
+    recipe = _recipe_context(clip)
+    if recipe is not None:
+        summary, language = recipe
+        system_prompt, user_prompt = build_recipe_prompt(summary, platform, language)
+    else:
+        system_prompt, user_prompt = build_prompt(_build_clip_summary(clip), platform)
+    return SocialKitPrompt(prompt=system_prompt + "\n\n" + user_prompt)
 
 
 @router.post("/{clip_id}/generate", response_model=SocialKit)

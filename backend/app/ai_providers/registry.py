@@ -32,6 +32,13 @@ from pydantic import BaseModel
 _RETRY_BACKOFF_SECONDS = [2, 5, 10]
 _RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# A request the user is watching (Social Kit) can't ride out a minute of
+# backoff and model probing -- the app gives up on it at 60s. Quick mode tries
+# twice, caps each attempt, and fails with a plain message instead of hunting
+# for another model.
+_QUICK_BACKOFF_SECONDS = [2]
+_QUICK_ATTEMPT_TIMEOUT_SECONDS = 25.0
+
 # When the retries run out, the raw provider payload ("503 UNAVAILABLE
 # {'error': ...}") is what used to reach the user, and it reads like an app
 # bug when the actual fix is almost always "pick a different model". These
@@ -186,6 +193,7 @@ def complete_chat(
     system_prompt: str,
     user_prompt: str,
     on_model_switch: Callable[[str, str], None] | None = None,
+    quick: bool = False,
 ) -> str:
     """One vendor-agnostic entry point: send a system+user prompt, get the
     model's text response back. Raises on failure -- callers (clip
@@ -196,7 +204,7 @@ def complete_chat(
     the retries, raises immediately -- unless another model on the same key
     can answer, in which case the request is completed with that one and
     `on_model_switch(from_model, to_model)` is called to say so."""
-    return _complete_with_retry(config, system_prompt, user_prompt, on_model_switch=on_model_switch)
+    return _complete_with_retry(config, system_prompt, user_prompt, on_model_switch=on_model_switch, quick=quick)
 
 
 def complete_chat_multimodal(
@@ -223,16 +231,28 @@ def _complete_with_retry(
     system_prompt: str,
     user_content: str | list[PromptPart],
     on_model_switch: Callable[[str, str], None] | None = None,
+    quick: bool = False,
 ) -> str:
-    for attempt, delay in enumerate([0, *_RETRY_BACKOFF_SECONDS]):
+    backoff = _QUICK_BACKOFF_SECONDS if quick else _RETRY_BACKOFF_SECONDS
+    timeout = _QUICK_ATTEMPT_TIMEOUT_SECONDS if quick else None
+    for attempt, delay in enumerate([0, *backoff]):
         if delay:
             time.sleep(delay)
         try:
-            return _complete_once(config, system_prompt, user_content)
+            return _complete_once(config, system_prompt, user_content, **({"timeout": timeout} if timeout else {}))
         except Exception as exc:  # noqa: BLE001 -- re-raised immediately unless retryable
+            if quick and _is_timeout(exc):
+                exc = ProviderUnavailableError(
+                    f'The AI model "{config.model}" did not answer within {int(_QUICK_ATTEMPT_TIMEOUT_SECONDS)}s.'
+                )
+                if attempt == len(backoff):
+                    raise exc
+                continue
             if not _is_retryable(exc):
                 raise
-            if attempt == len(_RETRY_BACKOFF_SECONDS):
+            if quick and attempt == len(backoff):
+                raise ProviderUnavailableError(_unavailable_message(config, exc, None, attempts=1 + len(backoff))) from exc
+            if attempt == len(backoff):
                 return _complete_on_another_model(config, system_prompt, user_content, exc, on_model_switch)
     raise AssertionError("unreachable")  # the loop above always returns or raises
 
@@ -267,14 +287,22 @@ def _complete_on_another_model(
     raise ProviderUnavailableError(_unavailable_message(config, exc, None)) from exc
 
 
+def _is_timeout(exc: Exception) -> bool:
+    if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+        return True
+    return "timed out" in str(exc).lower() or "deadline" in str(exc).lower()
+
+
 def _is_rate_limit(exc: Exception) -> bool:
     if isinstance(exc, genai_errors.ClientError) and exc.code == 429:
         return True
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
 
 
-def _unavailable_message(config: ProviderConfig, exc: Exception, alternative: str | None = None) -> str:
-    attempts = 1 + len(_RETRY_BACKOFF_SECONDS)
+def _unavailable_message(
+    config: ProviderConfig, exc: Exception, alternative: str | None = None, attempts: int | None = None
+) -> str:
+    attempts = attempts or 1 + len(_RETRY_BACKOFF_SECONDS)
     cause = (
         "has no quota left for your API key right now"
         if _is_rate_limit(exc)
@@ -364,16 +392,24 @@ def _list_model_ids(creds: ProviderCredentials) -> list[str]:
     return [item["id"] for item in response.json().get("data", []) if item.get("id")]
 
 
-def _complete_once(config: ProviderConfig, system_prompt: str, user_prompt: str | list[PromptPart]) -> str:
+def _complete_once(
+    config: ProviderConfig, system_prompt: str, user_prompt: str | list[PromptPart], timeout: float | None = None
+) -> str:
     """One attempt, no retries -- the single place that picks a provider
     adapter, used by the retry loop, the failover and the probes alike."""
+    extra = {"timeout": timeout} if timeout else {}
     if config.provider_type == ProviderType.GEMINI:
-        return _complete_chat_gemini(config, system_prompt, user_prompt)
-    return _complete_chat_openai_compatible(config, system_prompt, user_prompt)
+        return _complete_chat_gemini(config, system_prompt, user_prompt, **extra)
+    return _complete_chat_openai_compatible(config, system_prompt, user_prompt, **extra)
 
 
-def _complete_chat_gemini(config: ProviderConfig, system_prompt: str, user_prompt: str | list[PromptPart]) -> str:
-    client = genai.Client(api_key=config.api_key)
+def _complete_chat_gemini(
+    config: ProviderConfig, system_prompt: str, user_prompt: str | list[PromptPart], timeout: float | None = None
+) -> str:
+    client = genai.Client(
+        api_key=config.api_key,
+        http_options=genai_types.HttpOptions(timeout=int(timeout * 1000)) if timeout else None,
+    )
     # A text-only request still passes the bare string straight through, so the
     # request AI Clipper sends is the one it has always sent.
     contents = user_prompt if isinstance(user_prompt, str) else _gemini_parts(user_prompt)
@@ -388,7 +424,7 @@ def _complete_chat_gemini(config: ProviderConfig, system_prompt: str, user_promp
 
 
 def _complete_chat_openai_compatible(
-    config: ProviderConfig, system_prompt: str, user_prompt: str | list[PromptPart]
+    config: ProviderConfig, system_prompt: str, user_prompt: str | list[PromptPart], timeout: float | None = None
 ) -> str:
     base_url = config.base_url or OPENAI_COMPATIBLE_DEFAULT_BASE_URLS.get(config.provider_type.value)
     if not base_url:
@@ -407,7 +443,7 @@ def _complete_chat_openai_compatible(
         },
         # Images are megabytes of base64 and minutes of model time; a text
         # request keeps the timeout it has always had.
-        timeout=120.0 if is_text_only else 300.0,
+        timeout=timeout or (120.0 if is_text_only else 300.0),
     )
     response.raise_for_status()
     data = response.json()

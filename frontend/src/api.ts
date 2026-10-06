@@ -85,7 +85,9 @@ async function request<T>(path: string, options: RequestInit = {}, timeoutMs = D
     if (res.status === 204) return undefined as T;
     return res.json();
   } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") {
+    // tauri-plugin-http rejects an aborted request with the bare string
+    // "Request canceled", not a DOMException -- ours is the only abort source.
+    if ((e instanceof DOMException && e.name === "AbortError") || e === "Request canceled" || (e instanceof Error && e.message === "Request canceled")) {
       throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s: ${path}`);
     }
     // The backend process is gone (crashed, still starting, killed by an
@@ -340,12 +342,17 @@ export function getSocialKits(clipId: string): Promise<SocialKit[]> {
   return request(`/social-kit/${clipId}`);
 }
 
+export async function getSocialKitPrompt(clipId: string, platform: string): Promise<string> {
+  const res = await request<{ prompt: string }>(`/social-kit/${clipId}/prompt?platform=${encodeURIComponent(platform)}`);
+  return res.prompt;
+}
+
 export function generateSocialKit(clipId: string, platform: string, provider: ProviderConfig): Promise<SocialKit> {
-  return request(`/social-kit/${clipId}/generate`, { method: "POST", body: JSON.stringify({ platform, provider }) }, 60_000);
+  return request(`/social-kit/${clipId}/generate`, { method: "POST", body: JSON.stringify({ platform, provider }) }, 90_000);
 }
 
 export function regenerateSocialKit(clipId: string, platform: string, provider: ProviderConfig): Promise<SocialKit> {
-  return request(`/social-kit/${clipId}/regenerate`, { method: "POST", body: JSON.stringify({ platform, provider }) }, 60_000);
+  return request(`/social-kit/${clipId}/regenerate`, { method: "POST", body: JSON.stringify({ platform, provider }) }, 90_000);
 }
 
 // --- Recipe Clipper ---------------------------------------------------------
