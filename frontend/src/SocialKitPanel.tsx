@@ -25,10 +25,12 @@ function CopyButton({
   text,
   lang,
   label,
+  onError,
 }: {
   text: string | (() => Promise<string>);
   lang: Language;
   label?: string;
+  onError?: (message: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -37,9 +39,10 @@ function CopyButton({
       await navigator.clipboard.writeText(typeof text === "string" ? text : await text());
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // clipboard access can be denied by the platform -- fail silently, the
-      // text is already visible on screen for the user to select manually.
+    } catch (e) {
+      // Text already on screen can be selected by hand, so those buttons stay
+      // quiet. A prompt fetched on click has nothing to select -- say why.
+      onError?.(String(e));
     }
   }
 
@@ -207,6 +210,7 @@ export default function SocialKitPanel({ lang, clipId, provider, onClose }: Prop
           <CopyButton
             lang={lang}
             label={t(lang, "copy_social_kit_prompt")}
+            onError={setError}
             text={() => getSocialKitPrompt(clipId, platform)}
           />
           {kit && (
